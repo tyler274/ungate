@@ -17,6 +17,7 @@ export type ExtensionToWebview =
 	| { type: 'auto-tunnel-state'; enabled: boolean }
 	| { type: 'tunnel-config'; provider: TunnelProvider; tokenSet: boolean }
 	| { type: 'dashboard-placement-state'; placement: DashboardPlacement }
+	| { type: 'cursor-provider-state'; enabled: boolean }
 	| { type: 'log'; source: 'api' | 'tunnel'; entry: LogEntry }
 	| { type: 'log-bulk'; source: 'api' | 'tunnel'; entries: LogEntry[] }
 	| { type: 'logs-cleared'; source: 'api' | 'tunnel' };
@@ -32,4 +33,5 @@ export type WebviewToExtension =
 	| { type: 'set-tunnel-provider'; provider: TunnelProvider }
 	| { type: 'set-ngrok-auth-token'; token: string }
 	| { type: 'set-dashboard-placement'; placement: DashboardPlacement }
+	| { type: 'set-cursor-provider-enabled'; enabled: boolean }
 	| { type: 'clear-logs'; source: 'api' | 'tunnel' };

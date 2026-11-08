@@ -49,6 +49,10 @@ export const runtimeAutoTunnelStateSchema = z.object({
 	lastAppliedUrl: z.string().nullable()
 });
 
+export const runtimeCursorProviderStateSchema = z.object({
+	enabled: z.boolean()
+});
+
 /** `quick` is the Cloudflare quick tunnel. `ngrok` keeps one account dev domain across restarts. */
 export const TUNNEL_PROVIDERS = ['quick', 'ngrok'] as const;
 
@@ -60,6 +64,8 @@ export const runtimeStateSchema = z.object({
 	keyFix: runtimeKeyFixStateSchema,
 	// State files written before auto-tunnel existed have no `autoTunnel`; the default keeps them parseable.
 	autoTunnel: runtimeAutoTunnelStateSchema.default({ enabled: false, lastAppliedUrl: null }),
+	// Opt-in for routing requests through the signed-in Cursor session; off unless the user connects.
+	cursorProvider: runtimeCursorProviderStateSchema.default({ enabled: false }),
 	// State files written before ngrok existed have no `tunnelProvider`; quick keeps their rotating URL.
 	tunnelProvider: runtimeTunnelProviderSchema.default('quick'),
 	clients: z.record(z.string(), runtimeClientEntrySchema),
