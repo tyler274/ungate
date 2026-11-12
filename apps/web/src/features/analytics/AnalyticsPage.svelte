@@ -90,6 +90,12 @@ function handleConfirmReset() {
 					value={Formatter.number(store.summary.cursorRequests)}
 					variant="success" />
 			{/if}
+			{#if store.summary.geminiRequests}
+				<StatCard
+					label={getProviderLabel('gemini')}
+					value={Formatter.number(store.summary.geminiRequests)}
+					variant="success" />
+			{/if}
 			<StatCard
 				label="Errors"
 				value={Formatter.number(store.summary.errorRequests)}
