@@ -1,3 +1,5 @@
+import { createServer, type Server } from 'node:http';
+
 import cors, { type FastifyCorsOptions } from '@fastify/cors';
 import Fastify, { type FastifyInstance } from 'fastify';
 
@@ -48,13 +50,14 @@ export async function drainServer(app: FastifyInstance, drainMs = DRAIN_TIMEOUT_
 	if (first === 'closed') return;
 	const cut = cutOpenStreams();
 	logger.log(`[shutdown] drain window over; ended ${cut} open stream(s)`);
+	const servers = listenersOf(app);
 	// Connections that went idle after close() started are not reaped by it; reap them as they finish.
-	const reap = setInterval(() => app.server.closeIdleConnections(), 50);
+	const reap = setInterval(() => servers.forEach((server) => server.closeIdleConnections()), 50);
 	const second = await Promise.race([closed.then(() => 'closed' as const), delay(CUT_GRACE_MS)]).finally(() =>
 		clearInterval(reap)
 	);
 	if (second === 'closed') return;
-	app.server.closeAllConnections();
+	for (const server of servers) server.closeAllConnections();
 	await closed;
 }
 
@@ -134,8 +137,8 @@ export async function startServer(): Promise<void> {
 	globalThis.console.log('[startup] register plugins...');
 	await registerRoutes(app);
 
-	globalThis.console.log(`[startup] listen ${config.port}...`);
-	await app.listen({ port: config.port, host: '0.0.0.0' });
+	globalThis.console.log(`[startup] listen ${config.hosts.join(',')}:${config.port}...`);
+	await listenOnAll(app, config.hosts, config.port);
 
 	// After the port is ours, so a second run that fails on the port never replaces a live socket.
 	// The leader window retries the socket on every runtime sync.
@@ -151,4 +154,103 @@ export async function startServer(): Promise<void> {
 	// Always print port to stdout — extension parses this to detect the running port.
 	// Uses globalThis.console to bypass quiet mode.
 	globalThis.console.log(`[ungate] listening on localhost:${config.port}`);
+}
+
+/** Further listeners `listenOnAll` added beside Fastify's own server, per app. */
+const extraListeners = new WeakMap<FastifyInstance, Server[]>();
+
+/** Every HTTP server that hands requests to `app`: Fastify's own and any further address. */
+function listenersOf(app: FastifyInstance): Server[] {
+	return [app.server, ...(extraListeners.get(app) ?? [])];
+}
+
+/** How often a further address that is not on this machine yet is tried again. */
+const ABSENT_ADDRESS_RETRY_MS = 5000;
+
+/**
+ * Listens on each address in `hosts`. The first is Fastify's own server; each further address gets
+ * a plain listener that hands requests to it, so routes see the real peer of every socket.
+ *
+ * A further address may belong to an interface that comes and goes, such as a container's veth.
+ * While it is absent (`EADDRNOTAVAIL`) it is retried in the background and the other addresses
+ * serve; any other failure to listen is fatal. At startup that rejects; in a background retry it
+ * goes to `onLateFailure`, which by default ends the process so its supervisor restarts it
+ * rather than leaving an address unserved while loopback looks healthy.
+ */
+export async function listenOnAll(
+	app: FastifyInstance,
+	hosts: string[],
+	port: number,
+	retryMs: number = ABSENT_ADDRESS_RETRY_MS,
+	onLateFailure: (error: unknown) => void = exitOnLateListenFailure
+): Promise<void> {
+	const [first, ...rest] = hosts;
+	const extra: Server[] = [];
+	extraListeners.set(app, extra);
+	const retries = new Set<NodeJS.Timeout>();
+	let closed = false;
+	let extraClosed: Promise<unknown> = Promise.resolve();
+	// preClose, so further addresses stop accepting when the drain starts, together with Fastify's own.
+	app.addHook('preClose', (done) => {
+		closed = true;
+		for (const timer of retries) clearTimeout(timer);
+		extraClosed = Promise.all(
+			extra.map((server) => {
+				const stopped = new Promise((resolve) => server.close(resolve));
+				server.closeIdleConnections();
+
+				return stopped;
+			})
+		);
+		done();
+	});
+	app.addHook('onClose', async () => {
+		await extraClosed;
+	});
+
+	await app.listen({ port, host: first });
+
+	const listenExtra = (host: string): Promise<void> => {
+		const server = createServer((request, response) => app.server.emit('request', request, response));
+
+		return new Promise<void>((resolve, reject) => {
+			server.once('error', reject);
+			server.listen(port, host, () => {
+				server.off('error', reject);
+				extra.push(server);
+				resolve();
+			});
+		});
+	};
+
+	const retryLater = (host: string): void => {
+		const timer = setTimeout(() => {
+			retries.delete(timer);
+			if (closed) return;
+			listenExtra(host).then(
+				() => globalThis.console.log(`[startup] listening on ${host}:${port}`),
+				(error: unknown) => (isAbsentAddress(error) ? retryLater(host) : onLateFailure(error))
+			);
+		}, retryMs);
+		retries.add(timer);
+	};
+
+	for (const host of rest) {
+		try {
+			await listenExtra(host);
+		} catch (error) {
+			if (!isAbsentAddress(error)) throw error;
+			globalThis.console.log(`[startup] ${host} is not on this machine yet; trying every ${retryMs} ms`);
+			retryLater(host);
+		}
+	}
+}
+
+function exitOnLateListenFailure(error: unknown): void {
+	globalThis.console.error('[ungate] a further listen address failed; exiting', error);
+	process.exit(1);
+}
+
+function isAbsentAddress(error: unknown): boolean {
+	return (error as NodeJS.ErrnoException | undefined)?.code === 'EADDRNOTAVAIL';
 }

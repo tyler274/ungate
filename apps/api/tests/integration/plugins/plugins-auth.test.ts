@@ -7,7 +7,7 @@ import { createTestApp } from '../test-harness';
 
 async function appWith(apiKey: string | undefined) {
 	const app = createTestApp({ apiKey });
-	app.get('/x', { onRequest: clientKeyAuth({ port: 0, apiKey, quietMode: true }) }, async (request) => ({
+	app.get('/x', { onRequest: clientKeyAuth({ port: 0, hosts: [], apiKey, quietMode: true }) }, async (request) => ({
 		clientId: request.clientId
 	}));
 	await app.ready();

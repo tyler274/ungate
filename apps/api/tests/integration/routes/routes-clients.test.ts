@@ -67,7 +67,14 @@ describe('routes-clients', () => {
 		const { key } = ClientKeys.create('coda-agent');
 		const app = await server();
 
-		for (const url of ['/settings', '/clients', '/analytics', '/analytics/clients', '/auth/claude/accounts', '/auth/cursor/status']) {
+		for (const url of [
+			'/settings',
+			'/clients',
+			'/analytics',
+			'/analytics/clients',
+			'/auth/claude/accounts',
+			'/auth/cursor/status'
+		]) {
 			for (const headers of [{}, { 'x-api-key': key }, { authorization: 'Bearer settings-key' }]) {
 				const remote = await app.inject({ method: 'GET', url, headers, ...REMOTE });
 				expect(remote.statusCode, `${url} from the container`).toBe(403);
@@ -77,7 +84,13 @@ describe('routes-clients', () => {
 			expect(tunnelled.statusCode, `${url} through the tunnel`).toBe(403);
 		}
 
-		const mint = await app.inject({ method: 'POST', url: '/clients', payload: { label: 'x' }, headers: { 'x-api-key': key }, ...REMOTE });
+		const mint = await app.inject({
+			method: 'POST',
+			url: '/clients',
+			payload: { label: 'x' },
+			headers: { 'x-api-key': key },
+			...REMOTE
+		});
 		expect(mint.statusCode).toBe(403);
 
 		expect((await app.inject({ method: 'GET', url: '/settings' })).statusCode).toBe(200);
@@ -93,7 +106,12 @@ describe('routes-clients', () => {
 		});
 		const app = await server();
 
-		const refused = await app.inject({ method: 'POST', url: '/v1/messages', payload: { model: 'm', max_tokens: 1, messages: [] }, ...REMOTE });
+		const refused = await app.inject({
+			method: 'POST',
+			url: '/v1/messages',
+			payload: { model: 'm', max_tokens: 1, messages: [] },
+			...REMOTE
+		});
 		expect(refused.statusCode).toBe(403);
 
 		const ok = await app.inject({
