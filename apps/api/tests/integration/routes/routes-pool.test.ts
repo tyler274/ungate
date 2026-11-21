@@ -35,6 +35,7 @@ describe('GET /v1/pool', () => {
 		const c = add('claude', 'c');
 		const d = add('claude', 'd');
 		add('openai', 'x');
+		add('gemini', 'g');
 		const reset = Date.now() + 3_600_000;
 		OAuthAccounts.markCooldown(b.id, reset + 60_000, 'anthropic_usage_limit', false);
 		OAuthAccounts.markCooldown(c.id, reset, 'anthropic_usage_limit', false);
@@ -48,7 +49,8 @@ describe('GET /v1/pool', () => {
 		expect(response.json()).toEqual({
 			providers: [
 				{ provider: 'claude', eligible: 1, cooling_down: 2, needs_login: 1, earliest_reset: new Date(reset).toISOString() },
-				{ provider: 'chatgpt', eligible: 1, cooling_down: 0, needs_login: 0, earliest_reset: null }
+				{ provider: 'chatgpt', eligible: 1, cooling_down: 0, needs_login: 0, earliest_reset: null },
+				{ provider: 'gemini', eligible: 1, cooling_down: 0, needs_login: 0, earliest_reset: null }
 			]
 		});
 		expect(response.body).not.toContain('example.com');

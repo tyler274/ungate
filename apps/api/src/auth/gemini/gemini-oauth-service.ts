@@ -92,7 +92,7 @@ export class GeminiOAuthService {
 			);
 			if (!setup.ok) {
 				// Saved so the card shows the account, but it cannot serve requests until Google allows it.
-				OAuthAccounts.markNeedsLogin(row.id, row.credentialVersion);
+				OAuthAccounts.markNeedsLogin(row.id, row.credentialVersion, 'provider_setup_rejected');
 				logger.log(`[accounts] gemini account ${row.id} rejected by Code Assist: ${setup.error}`);
 				AccountLoginSessions.finish(session, undefined, setup.error);
 

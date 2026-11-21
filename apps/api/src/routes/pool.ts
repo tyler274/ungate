@@ -4,10 +4,10 @@ import { clientKeyAuth } from '../plugins/auth';
 import type { PoolHealthResponse, PoolProviderName, SubscriptionProvider } from '@ungate/shared';
 import type { FastifyPluginCallback } from 'fastify';
 
-const POOL_NAME: Record<SubscriptionProvider, PoolProviderName> = { claude: 'claude', openai: 'chatgpt' };
+const POOL_NAME: Record<SubscriptionProvider, PoolProviderName> = { claude: 'claude', openai: 'chatgpt', gemini: 'gemini' };
 
 /** Every provider whose requests run on a pool of subscription accounts. */
-const POOLED: SubscriptionProvider[] = ['claude', 'openai'];
+const POOLED: SubscriptionProvider[] = ['claude', 'openai', 'gemini'];
 
 /**
  * Whether each account pool can serve a request now, for a client deciding to wait or warn

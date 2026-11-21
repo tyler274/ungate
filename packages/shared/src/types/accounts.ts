@@ -2,7 +2,7 @@ export type SubscriptionProvider = 'claude' | 'openai' | 'gemini';
 export type AccountAvailability = 'available' | 'cooling_down' | 'needs_login';
 
 /** Provider names in `GET /v1/pool`; the `openai` subscription pool is reported as `chatgpt`. */
-export type PoolProviderName = 'claude' | 'chatgpt';
+export type PoolProviderName = 'claude' | 'chatgpt' | 'gemini';
 
 /** One provider's account pool, counts only: no account identities. */
 export interface PoolProviderHealth {

@@ -25,7 +25,7 @@ export interface AccountIdentity {
 export type LoginAccountSnapshot = OAuthAccountRow[];
 
 /** Why an account moved to needs-login. */
-export type NeedsLoginCause = 'no_refresh_token' | 'refresh_rejected' | 'auth_rejected_after_refresh';
+export type NeedsLoginCause = 'no_refresh_token' | 'refresh_rejected' | 'auth_rejected_after_refresh' | 'provider_setup_rejected';
 
 const ACCOUNT_LABEL: Record<SubscriptionProvider, string> = { claude: 'Claude', openai: 'ChatGPT', gemini: 'Gemini' };
 
