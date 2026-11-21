@@ -35,6 +35,7 @@ export class TestHelper {
 			cursorProvider: {
 				enabled: false
 			},
+			tunnelProvider: 'quick',
 			clients,
 			commands: []
 		};

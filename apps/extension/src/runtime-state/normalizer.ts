@@ -50,6 +50,10 @@ export class RuntimeStateNormalizer {
 			next.cursorProvider = { enabled: parsed.data.cursorProvider.enabled === true };
 		}
 
+		if (parsed.success && parsed.data.tunnelProvider) {
+			next.tunnelProvider = parsed.data.tunnelProvider;
+		}
+
 		if (typeof next.api.lastSeenAt !== 'number') {
 			next.api.lastSeenAt = now;
 		}

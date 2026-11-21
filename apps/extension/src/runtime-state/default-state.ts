@@ -31,6 +31,7 @@ export class RuntimeStateDefaults {
 			cursorProvider: {
 				enabled: false
 			},
+			tunnelProvider: 'quick',
 			clients: {},
 			commands: []
 		};
