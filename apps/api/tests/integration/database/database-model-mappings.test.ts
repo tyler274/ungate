@@ -348,43 +348,4 @@ describe('database-model-mappings', () => {
 			expect(ModelMappings.list().map((model) => model.id)).toEqual(['opus-5.5-medium']);
 		});
 	});
-
-	describe('migration _0020 (Fable slug Cursor will accept)', () => {
-		const migration = readFileSync(join(__dirname, '../../../drizzle/_0020.sql'), 'utf8');
-		const fable = (id: string, sortOrder: number) => ({
-			id,
-			label: 'Fable 5.2 Medium',
-			provider: 'claude' as const,
-			upstreamModel: 'claude-fable-5-2',
-			sortOrder,
-			reasoningBudget: 'medium' as const,
-			serviceTier: null
-		});
-
-		it('prefixes fable ids and keeps the upstream model', () => {
-			ModelMappings.replace([fable('fable-5.2-medium', 0), fable('opus-5.5-medium', 1)]);
-			getSqlite().exec(migration);
-
-			expect(ModelMappings.list().map((model) => model.id)).toEqual(['ungate-fable-5.2-medium', 'opus-5.5-medium']);
-			expect(ModelMappings.resolveForChatCompletion('ungate-fable-5.2-medium')).toMatchObject({
-				upstreamModel: 'claude-fable-5-2',
-				reasoningBudget: 'medium'
-			});
-		});
-
-		it('drops a leftover short id when the prefixed id already exists', () => {
-			ModelMappings.replace([fable('ungate-fable-5.2-medium', 0), fable('fable-5.2-medium', 1)]);
-			getSqlite().exec(migration);
-
-			expect(ModelMappings.list().map((model) => model.id)).toEqual(['ungate-fable-5.2-medium']);
-		});
-
-		it('is idempotent', () => {
-			ModelMappings.replace([fable('fable-5.2-medium', 0)]);
-			getSqlite().exec(migration);
-			getSqlite().exec(migration);
-
-			expect(ModelMappings.list().map((model) => model.id)).toEqual(['ungate-fable-5.2-medium']);
-		});
-	});
 });
