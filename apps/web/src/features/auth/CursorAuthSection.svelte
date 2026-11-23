@@ -30,11 +30,11 @@ let importing = $state<string | null>(null);
 let error = $state<string | null>(null);
 
 const reasonText: Record<CursorSessionStatus['reason'], string> = {
-	ok: 'Session connected — inference blocked',
+	ok: 'Session connected',
 	disabled: 'Not connected',
 	no_bridge: 'Unavailable: the API was not started by this Cursor window',
 	no_cursor_api: 'Unavailable: this editor does not expose a Cursor session',
-	not_signed_in: 'Not signed in to Cursor — inference remains blocked',
+	not_signed_in: 'Not signed in to Cursor',
 	token_encrypted: 'Unavailable: this Cursor version encrypts its session token, which Ungate cannot read',
 	error: 'Could not read the Cursor session'
 };
@@ -119,15 +119,10 @@ const optedIn = $derived(enabled ?? (status ? status.reason !== 'disabled' : fal
 </script>
 
 <div class="card preset-tonal-surface border border-surface-700/30 p-5 space-y-4">
-	<div class="flex items-center gap-2">
-		<p class="text-sm font-semibold">Cursor</p>
-		<span class="badge text-[10px] preset-tonal-warning uppercase tracking-wide">Inference blocked</span>
-	</div>
+	<p class="text-sm font-semibold">Cursor</p>
 
 	<p class="text-xs text-surface-400">
-		Cursor inference is blocked because subscription-only billing cannot be guaranteed. Signing in, connecting a session,
-		discovering models, or importing a model mapping does not grant permission to run inference or prove included plan usage.
-		Billing for historical Cursor requests is unknown, not free. The session token stays inside the extension.
+		Requests use the Cursor account signed in to this window. The session token stays inside the extension.
 	</p>
 
 	{#if loading}
@@ -175,7 +170,7 @@ const optedIn = $derived(enabled ?? (status ? status.reason !== 'disabled' : fal
 		{#if connected}
 			<div class="space-y-2">
 				<div class="flex items-center justify-between gap-2">
-					<p class="text-xs font-medium text-surface-300">Discovered models — inference blocked</p>
+					<p class="text-xs font-medium text-surface-300">Discovered models</p>
 					<button
 						class="btn btn-sm preset-outlined-surface-700 hover:preset-filled-surface-500"
 						disabled={modelsLoading}
@@ -218,8 +213,7 @@ const optedIn = $derived(enabled ?? (status ? status.reason !== 'disabled' : fal
 						{/each}
 					</ul>
 					<p class="text-xs text-surface-400">
-						Imported mappings appear below as <code class="code">cursor-&lt;model&gt;</code> for configuration only. Importing does
-						not enable inference; subscription-only billing remains unverified.
+						Imported mappings appear below as <code class="code">cursor-&lt;model&gt;</code> and use your connected Cursor session.
 					</p>
 				{/if}
 			</div>

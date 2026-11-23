@@ -69,6 +69,11 @@ export class ExtensionController {
 		this.dashboard = new Dashboard(this.context, (message) => {
 			this.handleDashboardMessage(message);
 		});
+		this.context.subscriptions.push(
+			vscode.window.registerWebviewViewProvider('ungate.dashboard', this.dashboard, {
+				webviewOptions: { retainContextWhenHidden: true }
+			})
+		);
 		this.keyFix = new OpenAiKeyFix(
 			this.context,
 			(enabled) => {

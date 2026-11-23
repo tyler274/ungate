@@ -70,7 +70,12 @@ function handleLimitChange(event: Event) {
 		{#each store.filteredRequests as req (req.id)}
 			<div class="p-4 border-b border-surface-700/30 last:border-b-0">
 				<div class="flex items-center justify-between mb-2">
-					<span class="text-primary-500 font-medium text-sm">{formatModelName(req.model)}</span>
+					<span class="min-w-0">
+						<span class="text-primary-500 font-medium text-sm">{formatModelName(req.model)}</span>
+						{#if formatModelName(req.model) !== req.model}
+							<span class="ml-2 font-mono text-xs text-surface-400">{req.model}</span>
+						{/if}
+					</span>
 					<span class="badge text-xs {sourceClasses[req.source] || 'preset-tonal-surface'}">{req.source}</span>
 				</div>
 				<div class="text-surface-400 text-xs">
@@ -78,9 +83,6 @@ function handleLimitChange(event: Event) {
 					{req.inputTokens} in / {req.outputTokens} out
 					{#if req.latencyMs}
 						&bull; {Formatter.latency(req.latencyMs)}
-					{/if}
-					{#if req.estimatedCost === null}
-						&bull; Cost unknown (not free)
 					{/if}
 					{#if req.stream}
 						&bull; stream

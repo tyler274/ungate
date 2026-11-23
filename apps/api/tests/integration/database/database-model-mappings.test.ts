@@ -244,4 +244,147 @@ describe('database-model-mappings', () => {
 			expect(ModelMappings.resolveForChatCompletion('custom')).toBeNull();
 		});
 	});
+
+	describe('migration _0018 (custom slugs)', () => {
+		const seed = readFileSync(join(__dirname, '../../../drizzle/_0018.sql'), 'utf8');
+		const slugs = [
+			['sonnet-5.5-medium', 'claude', 'claude-sonnet-5-5', 'medium', null],
+			['sonnet-5.5-high', 'claude', 'claude-sonnet-5-5', 'high', null],
+			['haiku-5.5-medium', 'claude', 'claude-haiku-5-5', 'medium', null],
+			['haiku-5.5-high', 'claude', 'claude-haiku-5-5', 'high', null],
+			['fable-5.2-medium', 'claude', 'claude-fable-5-2', 'medium', null],
+			['ungate-astra-high', 'openai', 'gpt-6-astra', 'high', 'default']
+		] as const;
+
+		it('seeds the slugs Cursor has saved', () => {
+			getSqlite().exec(seed);
+
+			for (const [id, provider, upstreamModel, reasoningBudget, serviceTier] of slugs) {
+				expect(ModelMappings.resolveForChatCompletion(id)).toMatchObject({
+					id,
+					provider,
+					upstreamModel,
+					reasoningBudget,
+					serviceTier
+				});
+			}
+		});
+
+		it('is idempotent and skips a slug the user already defined', () => {
+			ModelMappings.replace([
+				{
+					id: 'my-fable',
+					label: 'My Fable',
+					provider: 'claude',
+					upstreamModel: 'claude-fable-5-2',
+					sortOrder: 0,
+					reasoningBudget: 'medium',
+					serviceTier: null
+				}
+			]);
+			getSqlite().exec(seed);
+			getSqlite().exec(seed);
+
+			expect(ModelMappings.list().filter((model) => model.upstreamModel === 'claude-fable-5-2').map((model) => model.id)).toEqual([
+				'my-fable'
+			]);
+			expect(ModelMappings.list().filter((model) => model.id === 'ungate-astra-high')).toHaveLength(1);
+			expect(ModelMappings.resolveForChatCompletion('haiku-5.5-high')?.upstreamModel).toBe('claude-haiku-5-5');
+		});
+	});
+
+	describe('migration _0019 (one slug per Opus 5.5 tier)', () => {
+		const migration = readFileSync(join(__dirname, '../../../drizzle/_0019.sql'), 'utf8');
+		const opus = (
+			id: string,
+			label: string,
+			reasoningBudget: 'low' | 'medium' | 'high' | 'xhigh' | null,
+			sortOrder: number
+		) => ({
+			id,
+			label,
+			provider: 'claude' as const,
+			upstreamModel: 'claude-opus-5-5',
+			sortOrder,
+			reasoningBudget,
+			serviceTier: null
+		});
+
+		it('drops the unopus copies and the id with a space, and restores the high label', () => {
+			ModelMappings.replace([
+				opus('unopus-5.5-medium', 'Opus 5.5 Medium', 'medium', 0),
+				opus('opus-5.5-medium', 'Opus 5.5 Medium', 'medium', 1),
+				opus('opus-5.5-high', 'Opus 5.5', 'high', 2),
+				opus('opus-5.5 high', 'Opus 5.5', 'high', 3),
+				opus('sonnet-5.5-medium', 'Sonnet 5.5 Medium', 'medium', 4)
+			]);
+			getSqlite().exec(migration);
+
+			expect(ModelMappings.list().map((model) => [model.id, model.label])).toEqual([
+				['opus-5.5-medium', 'Opus 5.5 Medium'],
+				['opus-5.5-high', 'Opus 5.5 High'],
+				['sonnet-5.5-medium', 'Sonnet 5.5 Medium']
+			]);
+		});
+
+		it('renames a lone unopus slug and a lone space id', () => {
+			ModelMappings.replace([
+				opus('unopus-5.5-low', 'Opus 5.5 Low', 'low', 0),
+				opus('opus-5.5 high', 'Opus 5.5', null, 1)
+			]);
+			getSqlite().exec(migration);
+
+			expect(ModelMappings.list().map((model) => [model.id, model.reasoningBudget, model.label])).toEqual([
+				['opus-5.5-low', 'low', 'Opus 5.5 Low'],
+				['opus-5.5-high', 'high', 'Opus 5.5 High']
+			]);
+		});
+
+		it('is idempotent', () => {
+			ModelMappings.replace([opus('opus-5.5-medium', 'Opus 5.5 Medium', 'medium', 0)]);
+			getSqlite().exec(migration);
+			getSqlite().exec(migration);
+
+			expect(ModelMappings.list().map((model) => model.id)).toEqual(['opus-5.5-medium']);
+		});
+	});
+
+	describe('migration _0020 (Fable slug Cursor will accept)', () => {
+		const migration = readFileSync(join(__dirname, '../../../drizzle/_0020.sql'), 'utf8');
+		const fable = (id: string, sortOrder: number) => ({
+			id,
+			label: 'Fable 5.2 Medium',
+			provider: 'claude' as const,
+			upstreamModel: 'claude-fable-5-2',
+			sortOrder,
+			reasoningBudget: 'medium' as const,
+			serviceTier: null
+		});
+
+		it('prefixes fable ids and keeps the upstream model', () => {
+			ModelMappings.replace([fable('fable-5.2-medium', 0), fable('opus-5.5-medium', 1)]);
+			getSqlite().exec(migration);
+
+			expect(ModelMappings.list().map((model) => model.id)).toEqual(['ungate-fable-5.2-medium', 'opus-5.5-medium']);
+			expect(ModelMappings.resolveForChatCompletion('ungate-fable-5.2-medium')).toMatchObject({
+				upstreamModel: 'claude-fable-5-2',
+				reasoningBudget: 'medium'
+			});
+		});
+
+		it('drops a leftover short id when the prefixed id already exists', () => {
+			ModelMappings.replace([fable('ungate-fable-5.2-medium', 0), fable('fable-5.2-medium', 1)]);
+			getSqlite().exec(migration);
+
+			expect(ModelMappings.list().map((model) => model.id)).toEqual(['ungate-fable-5.2-medium']);
+		});
+
+		it('is idempotent', () => {
+			ModelMappings.replace([fable('fable-5.2-medium', 0)]);
+			getSqlite().exec(migration);
+			getSqlite().exec(migration);
+
+			expect(ModelMappings.list().map((model) => model.id)).toEqual(['ungate-fable-5.2-medium']);
+		});
+	});
 });

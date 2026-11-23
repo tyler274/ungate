@@ -191,6 +191,10 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
 // Dated variants are the actual stored names for 4.5 models.
 const MODEL_LABELS: Record<string, string> = {
 	'gpt-6-astra': 'GPT-6 Astra',
+	'claude-opus-5-5': 'Claude Opus 5.5',
+	'claude-sonnet-5-5': 'Claude Sonnet 5.5',
+	'claude-haiku-5-5': 'Claude Haiku 5.5',
+	'claude-fable-5-2': 'Claude Fable 5.2',
 	// GPT-5.6 OpenAI series
 	'gpt-5.6': 'GPT-5.6',
 	'gpt-5.6-sol': 'GPT-5.6 Sol',
@@ -260,6 +264,14 @@ export function formatModelName(raw: string): string {
 	return raw;
 }
 
+function withSlug(name: string, slug: string): string {
+	if (!slug || name === slug) {
+		return name;
+	}
+
+	return `${name} · ${slug}`;
+}
+
 function availableModels(): ModelOption[] {
 	const seen = new SvelteSet<string>();
 	const models: ModelOption[] = [];
@@ -273,7 +285,7 @@ function availableModels(): ModelOption[] {
 			seen.add(model.id);
 			models.push({
 				value: model.id,
-				label: model.label.trim().length > 0 ? model.label : formatModelName(model.id)
+				label: withSlug(model.label.trim() || formatModelName(model.id), model.id)
 			});
 		}
 	}
@@ -285,7 +297,7 @@ function availableModels(): ModelOption[] {
 
 		if (!seen.has(r.model)) {
 			seen.add(r.model);
-			models.push({ value: r.model, label: formatModelName(r.model) });
+			models.push({ value: r.model, label: withSlug(formatModelName(r.model), r.model) });
 		}
 	}
 
