@@ -19,6 +19,7 @@ export type Msg =
 	| { type: 'set-auto-tunnel-enabled'; enabled: boolean }
 	| { type: 'set-tunnel-provider'; provider: 'quick' | 'ngrok' }
 	| { type: 'set-ngrok-auth-token'; token: string }
+	| { type: 'set-ngrok-domain'; domain: string | null }
 	| { type: 'clear-logs'; source: 'api' | 'tunnel' }
 	| Extract<WebviewToExtension, { type: (typeof MSGS_SIMPLE)[number] }>;
 
@@ -124,8 +125,8 @@ export class Dashboard {
 		this.panel?.webview.postMessage({ type: 'tunnel-status', state });
 	}
 
-	sendTunnelConfig(provider: 'quick' | 'ngrok', tokenSet: boolean): void {
-		this.panel?.webview.postMessage({ type: 'tunnel-config', provider, tokenSet });
+	sendTunnelConfig(provider: 'quick' | 'ngrok', tokenSet: boolean, domain: string | null): void {
+		this.panel?.webview.postMessage({ type: 'tunnel-config', provider, tokenSet, domain });
 	}
 
 	isOpen(): boolean {
@@ -182,6 +183,20 @@ export class Dashboard {
 			}
 
 			return { type: 'set-ngrok-auth-token', token: token.trim() };
+		}
+
+		if (type === 'set-ngrok-domain') {
+			const domain = record.domain;
+
+			if (domain === null || (typeof domain === 'string' && domain.trim().length === 0)) {
+				return { type: 'set-ngrok-domain', domain: null };
+			}
+
+			if (typeof domain !== 'string' || domain.length > 512) {
+				return null;
+			}
+
+			return { type: 'set-ngrok-domain', domain };
 		}
 
 		if (type === 'clear-logs') {

@@ -5,6 +5,7 @@ import {
 	DEFAULT_KEY_FIX_ENABLED,
 	sleep,
 	type ApiStatus as ApiLifecycleStatus,
+	NgrokDomain,
 	type RuntimeCommandAction,
 	type RuntimeState,
 	type TunnelState
@@ -391,6 +392,12 @@ export class ExtensionController {
 			return;
 		}
 
+		if (message.type === 'set-ngrok-domain') {
+			void this.setNgrokDomainByUser(message.domain);
+
+			return;
+		}
+
 		if (message.type === 'restart-server') {
 			this.enqueueCommand('restart-api');
 
@@ -490,7 +497,7 @@ export class ExtensionController {
 	}
 
 	private async sendTunnelConfig(runtimeState: RuntimeState = RuntimeStateStore.read()): Promise<void> {
-		this.dashboard.sendTunnelConfig(runtimeState.tunnelProvider, await this.ngrokToken.isSet());
+		this.dashboard.sendTunnelConfig(runtimeState.tunnelProvider, await this.ngrokToken.isSet(), runtimeState.ngrokDomain);
 	}
 
 	private async setTunnelProviderByUser(provider: RuntimeState['tunnelProvider']): Promise<void> {
@@ -502,6 +509,31 @@ export class ExtensionController {
 			});
 		} catch (error: unknown) {
 			void vscode.window.showErrorMessage(`Could not change the tunnel provider: ${this.formatError(error)}`);
+		}
+
+		await this.sendTunnelConfig();
+	}
+
+	private async setNgrokDomainByUser(domain: string | null): Promise<void> {
+		const normalized = domain === null ? null : NgrokDomain.normalize(domain);
+
+		if (domain !== null && normalized === null) {
+			void vscode.window.showErrorMessage(
+				'The ngrok domain must be a hostname such as api.example.com, without https:// or a path.'
+			);
+			await this.sendTunnelConfig();
+
+			return;
+		}
+
+		try {
+			await RuntimeStateStore.mutate((current) => {
+				current.ngrokDomain = normalized;
+
+				return current;
+			});
+		} catch (error: unknown) {
+			void vscode.window.showErrorMessage(`Could not save the ngrok domain: ${this.formatError(error)}`);
 		}
 
 		await this.sendTunnelConfig();

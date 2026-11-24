@@ -14,6 +14,7 @@ interface TunnelStore {
 	readonly autoTunnelEnabled: boolean;
 	readonly provider: TunnelProvider;
 	readonly tokenSet: boolean;
+	readonly ngrokDomain: string | null;
 	startTunnel(): void;
 	stopTunnel(): void;
 	restartTunnel(): void;
@@ -21,6 +22,7 @@ interface TunnelStore {
 	setAutoTunnelEnabled(enabled: boolean): void;
 	setProvider(provider: TunnelProvider): void;
 	setNgrokAuthToken(token: string): void;
+	setNgrokDomain(domain: string | null): void;
 }
 
 const defaultState: TunnelState = { status: 'stopped', url: null, error: null };
@@ -30,6 +32,7 @@ let keyFixEnabled = $state(DEFAULT_KEY_FIX_ENABLED);
 let autoTunnelEnabled = $state(DEFAULT_AUTO_TUNNEL_ENABLED);
 let provider = $state<TunnelProvider>('quick');
 let tokenSet = $state(false);
+let ngrokDomain = $state<string | null>(null);
 
 function handleMessage(event: MessageEvent): void {
 	const message = event.data as ExtensionToWebview;
@@ -49,6 +52,7 @@ function handleMessage(event: MessageEvent): void {
 	if (message.type === 'tunnel-config') {
 		provider = message.provider;
 		tokenSet = message.tokenSet;
+		ngrokDomain = message.domain;
 	}
 }
 
@@ -83,6 +87,10 @@ function setNgrokAuthToken(token: string): void {
 	postExtensionMessage({ type: 'set-ngrok-auth-token', token });
 }
 
+function setNgrokDomain(domain: string | null): void {
+	postExtensionMessage({ type: 'set-ngrok-domain', domain });
+}
+
 export function getTunnelStore(): TunnelStore {
 	const store: TunnelStore = {
 		get tunnel() {
@@ -100,13 +108,17 @@ export function getTunnelStore(): TunnelStore {
 		get tokenSet() {
 			return tokenSet;
 		},
+		get ngrokDomain() {
+			return ngrokDomain;
+		},
 		startTunnel,
 		stopTunnel,
 		restartTunnel,
 		setKeyFixEnabled,
 		setAutoTunnelEnabled,
 		setProvider,
-		setNgrokAuthToken
+		setNgrokAuthToken,
+		setNgrokDomain
 	};
 
 	return store;
