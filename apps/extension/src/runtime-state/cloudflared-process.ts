@@ -36,6 +36,14 @@ export class CloudflaredProcess {
 		return null;
 	}
 
+	public static terminate(pid: number): void {
+		try {
+			process.kill(pid);
+		} catch {
+			// The process already exited.
+		}
+	}
+
 	private static listCommands(): ServingCloudflared[] {
 		if (process.platform === 'linux') {
 			return this.listLinuxCommands();
