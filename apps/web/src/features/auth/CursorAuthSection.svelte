@@ -35,7 +35,7 @@ const reasonText: Record<CursorSessionStatus['reason'], string> = {
 	no_bridge: 'Unavailable: the API was not started by this Cursor window',
 	no_cursor_api: 'Unavailable: this editor does not expose a Cursor session',
 	not_signed_in: 'Not signed in to Cursor',
-	token_encrypted: 'Unavailable: this Cursor version encrypts its session token, which Ungate cannot read',
+	token_encrypted: 'Cannot unlock the encrypted Cursor session. On Linux, unlock your desktop keyring and install secret-tool (Secret Service) or busctl and kwallet-query (KWallet 6). Other backends are not supported yet.',
 	error: 'Could not read the Cursor session'
 };
 
