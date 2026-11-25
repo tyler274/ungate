@@ -1,5 +1,8 @@
 import { MINIMAX_BASE_URLS, type AppSettings } from '@ungate/shared';
 
+import { CLAUDE_CODE_OPUS_PACKET } from './proxy/claude-code-packet';
+import { logger } from './utils/logger';
+
 import type { ProxyConfig } from './types';
 
 export const config = {
@@ -12,18 +15,19 @@ export const config = {
 	},
 	anthropic: {
 		apiUrl: 'https://api.anthropic.com',
-		beta: {
-			oauth: 'oauth-2025-04-20',
-			claudeCode: 'claude-code-20250219',
-			interleavedThinking: 'interleaved-thinking-2025-05-14'
-		}
+		/** Subscription usage (what Claude Code `/usage` shows). */
+		usageUrl: 'https://api.anthropic.com/api/oauth/usage',
+		usageBeta: 'oauth-2025-04-20',
+		/** Subscription tier (`organization.rate_limit_tier`); same token and beta as usage. */
+		profileUrl: 'https://api.anthropic.com/api/oauth/profile',
+		betas: CLAUDE_CODE_OPUS_PACKET.betas
 	},
 	minimax: {
 		baseUrlGlobal: MINIMAX_BASE_URLS.global,
 		baseUrlChina: MINIMAX_BASE_URLS.china
 	},
 	claudeCode: {
-		systemPrompt: "You are Claude Code, Anthropic's official CLI for Claude."
+		systemPrompt: CLAUDE_CODE_OPUS_PACKET.identity
 	},
 	openai: {
 		oauth: {
@@ -39,11 +43,65 @@ export const config = {
 				originator: 'codex_cli_rs'
 			}
 		},
-		codexUrl: 'https://chatgpt.com/backend-api/codex'
+		codexUrl: 'https://chatgpt.com/backend-api/codex',
+		/** Subscription usage (what Codex `/status` shows). */
+		usageUrl: 'https://chatgpt.com/backend-api/wham/usage'
+	},
+	gemini: {
+		/** Antigravity installed-app OAuth requires a complete client pair from the environment. */
+		clientVersion: '2.33.0',
+		userAgent: `antigravity/hub/2.33.0 (aidev_client; os_type=${process.platform}; arch=${process.arch}; cl=1023160026)`,
+		oauth: {
+			authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+			tokenUrl: 'https://oauth2.googleapis.com/token',
+			userInfoUrl: 'https://www.googleapis.com/oauth2/v2/userinfo',
+			scope: [
+				'https://www.googleapis.com/auth/cloud-platform',
+				'https://www.googleapis.com/auth/userinfo.email',
+				'https://www.googleapis.com/auth/userinfo.profile',
+				'https://www.googleapis.com/auth/aicode',
+				'https://www.googleapis.com/auth/cclog',
+				'https://www.googleapis.com/auth/experimentsandconfigs'
+			].join(' '),
+			callbackPath: '/oauth2callback',
+			successUrl: 'https://developers.google.com/gemini-code-assist/auth_success_gemini',
+			failureUrl: 'https://developers.google.com/gemini-code-assist/auth_failure_gemini'
+		},
+		/** Consumer Antigravity endpoint. Never fall back to the enterprise Code Assist host. */
+		codeAssistUrl: 'https://daily-cloudcode-pa.googleapis.com/v1internal'
 	}
 } as const;
 
 export type Config = ProxyConfig;
+
+export interface GeminiOAuthClientCredentials {
+	clientId: string;
+	clientSecret: string;
+}
+
+const GOOGLE_CLIENT_ID_SUFFIX = '.apps.googleusercontent.com';
+let warnedInvalidGeminiClientId = false;
+
+/**
+ * Antigravity-compatible installed-app credentials come only from the environment.
+ * Missing, partial or invalid pairs disable sign-in; no OAuth client is bundled.
+ */
+export function geminiOAuthClient(): GeminiOAuthClientCredentials | null {
+	const clientId = process.env.UNGATE_GEMINI_OAUTH_CLIENT_ID?.trim();
+	const clientSecret = process.env.UNGATE_GEMINI_OAUTH_CLIENT_SECRET?.trim();
+	if (!clientId || !clientSecret) return null;
+
+	if (!clientId.endsWith(GOOGLE_CLIENT_ID_SUFFIX)) {
+		if (!warnedInvalidGeminiClientId) {
+			warnedInvalidGeminiClientId = true;
+			logger.warn(`UNGATE_GEMINI_OAUTH_CLIENT_ID does not end with ${GOOGLE_CLIENT_ID_SUFFIX}; Gemini sign-in stays off`);
+		}
+
+		return null;
+	}
+
+	return { clientId, clientSecret };
+}
 
 export function getConfig(settings: AppSettings): ProxyConfig {
 	let envPort: number | undefined;
@@ -56,8 +114,14 @@ export function getConfig(settings: AppSettings): ProxyConfig {
 		}
 	}
 
+	const hosts = (process.env.HOST ?? '')
+		.split(',')
+		.map((host) => host.trim())
+		.filter((host) => host !== '');
+
 	return {
 		port: envPort ?? settings.port,
+		hosts: hosts.length > 0 ? hosts : ['0.0.0.0'],
 		apiKey: settings.apiKey ?? undefined,
 		quietMode: settings.quiet
 	};

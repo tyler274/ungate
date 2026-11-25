@@ -16,11 +16,17 @@ const MSGS_SIMPLE = ['webview-ready', 'restart-server', 'start-tunnel', 'stop-tu
 export type Msg =
 	| { type: 'open-external-url'; url: string }
 	| { type: 'set-key-fix-enabled'; enabled: boolean }
+	| { type: 'set-auto-tunnel-enabled'; enabled: boolean }
+	| { type: 'set-cursor-provider-enabled'; enabled: boolean }
+	| { type: 'set-tunnel-provider'; provider: 'quick' | 'ngrok' }
+	| { type: 'set-ngrok-auth-token'; token: string }
 	| { type: 'clear-logs'; source: 'api' | 'tunnel' }
 	| Extract<WebviewToExtension, { type: (typeof MSGS_SIMPLE)[number] }>;
 
-export class Dashboard {
-	private panel: vscode.WebviewPanel | null = null;
+const DASHBOARD_VIEW_ID = 'ungate.dashboard';
+
+export class Dashboard implements vscode.WebviewViewProvider {
+	private view: vscode.WebviewView | null = null;
 	private readonly apiLogBuffer = new LogRingBuffer(LOG_BUFFER_SIZE);
 	private readonly tunnelLogBuffer = new LogRingBuffer(LOG_BUFFER_SIZE);
 	private currentPort: number | null = null;
@@ -33,18 +39,12 @@ export class Dashboard {
 		private readonly onMessage: (message: Msg) => void
 	) {}
 
-	show(): void {
-		if (this.panel) {
-			this.panel.reveal();
+	resolveWebviewView(webviewView: vscode.WebviewView): void {
+		this.stopLogPoll();
+		this.view = webviewView;
+		webviewView.webview.options = this.getWebviewOptions();
 
-			return;
-		}
-
-		this.panel = vscode.window.createWebviewPanel('ungate', 'Ungate', vscode.ViewColumn.One, this.getWebviewOptions());
-
-		this.panel.iconPath = vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'icon.png'));
-
-		this.panel.webview.onDidReceiveMessage((message: unknown) => {
+		webviewView.webview.onDidReceiveMessage((message: unknown) => {
 			const parsed = Dashboard.parseIncomingMessage(message);
 
 			if (!parsed) {
@@ -54,21 +54,27 @@ export class Dashboard {
 			this.onMessage(parsed);
 		});
 
-		this.panel.webview.html = this.buildHtml();
+		webviewView.webview.html = this.buildHtml();
 
-		this.panel.onDidChangeViewState(() => {
-			if (this.panel?.visible) {
+		webviewView.onDidChangeVisibility(() => {
+			if (webviewView.visible) {
 				this.sendBufferedLogs('api');
 				this.sendBufferedLogs('tunnel');
 			}
 		});
 
-		this.panel.onDidDispose(() => {
+		webviewView.onDidDispose(() => {
 			this.stopLogPoll();
-			this.panel = null;
+			this.view = null;
 		});
 
 		this.startLogPoll();
+	}
+
+	show(): void {
+		// The agent layout hides the editor while chat is maximized, so an editor tab never appears.
+		// Focusing the panel view opens the panel even when that editor area is hidden.
+		void vscode.commands.executeCommand(`${DASHBOARD_VIEW_ID}.focus`);
 	}
 
 	setPort(port: number | null): void {
@@ -78,8 +84,8 @@ export class Dashboard {
 
 		this.currentPort = port;
 
-		if (this.panel) {
-			this.panel.webview.options = this.getWebviewOptions();
+		if (this.view) {
+			this.view.webview.options = this.getWebviewOptions();
 		}
 
 		this.sendPort();
@@ -91,7 +97,7 @@ export class Dashboard {
 		buffer.push(entry);
 		SharedLogStore.append(source, entry);
 
-		this.panel?.webview.postMessage({ type: 'log', source, entry });
+		this.view?.webview.postMessage({ type: 'log', source, entry });
 	}
 
 	clearLogs(source: 'api' | 'tunnel'): void {
@@ -99,26 +105,38 @@ export class Dashboard {
 		buffer.clear();
 		SharedLogStore.clear(source);
 		this.syncLogFileOffsets();
-		this.panel?.webview.postMessage({ type: 'logs-cleared', source });
+		this.view?.webview.postMessage({ type: 'logs-cleared', source });
 	}
 
 	sendInitialState(tunnelState: TunnelState): void {
 		this.sendPort();
 		this.sendBufferedLogs('api');
 		this.sendBufferedLogs('tunnel');
-		this.panel?.webview.postMessage({ type: 'tunnel-status', state: tunnelState });
+		this.view?.webview.postMessage({ type: 'tunnel-status', state: tunnelState });
 	}
 
 	sendKeyFixState(enabled: boolean): void {
-		this.panel?.webview.postMessage({ type: 'key-fix-state', enabled });
+		this.view?.webview.postMessage({ type: 'key-fix-state', enabled });
+	}
+
+	sendAutoTunnelState(enabled: boolean): void {
+		this.view?.webview.postMessage({ type: 'auto-tunnel-state', enabled });
+	}
+
+	sendCursorProviderState(enabled: boolean): void {
+		this.view?.webview.postMessage({ type: 'cursor-provider-state', enabled });
 	}
 
 	sendTunnelState(state: TunnelState): void {
-		this.panel?.webview.postMessage({ type: 'tunnel-status', state });
+		this.view?.webview.postMessage({ type: 'tunnel-status', state });
+	}
+
+	sendTunnelConfig(provider: 'quick' | 'ngrok', tokenSet: boolean): void {
+		this.view?.webview.postMessage({ type: 'tunnel-config', provider, tokenSet });
 	}
 
 	isOpen(): boolean {
-		return this.panel !== null;
+		return this.view !== null;
 	}
 
 	private static parseIncomingMessage(raw: unknown): Msg | null {
@@ -143,14 +161,34 @@ export class Dashboard {
 			return { type: 'open-external-url', url };
 		}
 
-		if (type === 'set-key-fix-enabled') {
+		if (type === 'set-key-fix-enabled' || type === 'set-auto-tunnel-enabled' || type === 'set-cursor-provider-enabled') {
 			const enabled = record.enabled;
 
 			if (typeof enabled !== 'boolean') {
 				return null;
 			}
 
-			return { type: 'set-key-fix-enabled', enabled };
+			return { type, enabled };
+		}
+
+		if (type === 'set-tunnel-provider') {
+			const provider = record.provider;
+
+			if (provider !== 'quick' && provider !== 'ngrok') {
+				return null;
+			}
+
+			return { type: 'set-tunnel-provider', provider };
+		}
+
+		if (type === 'set-ngrok-auth-token') {
+			const token = record.token;
+
+			if (typeof token !== 'string' || token.trim().length === 0) {
+				return null;
+			}
+
+			return { type: 'set-ngrok-auth-token', token: token.trim() };
 		}
 
 		if (type === 'clear-logs') {
@@ -194,22 +232,22 @@ export class Dashboard {
 	}
 
 	private sendPort(): void {
-		this.panel?.webview.postMessage({ type: 'port', port: this.currentPort });
+		this.view?.webview.postMessage({ type: 'port', port: this.currentPort });
 	}
 
 	private rebuildHtml(): void {
-		if (!this.panel) {
+		if (!this.view) {
 			return;
 		}
 
-		this.panel.webview.html = this.buildHtml();
+		this.view.webview.html = this.buildHtml();
 	}
 
 	private sendBufferedLogs(source: 'api' | 'tunnel'): void {
 		const entries = SharedLogStore.readAll(source);
 
 		if (entries.length > 0) {
-			this.panel?.webview.postMessage({ type: 'log-bulk', source, entries });
+			this.view?.webview.postMessage({ type: 'log-bulk', source, entries });
 		}
 
 		this.syncLogFileOffsets();
@@ -241,7 +279,7 @@ export class Dashboard {
 		}
 
 		for (const entry of entries) {
-			this.panel?.webview.postMessage({ type: 'log', source, entry });
+			this.view?.webview.postMessage({ type: 'log', source, entry });
 		}
 	}
 
@@ -254,11 +292,12 @@ export class Dashboard {
 
 	private buildHtml(): string {
 		const distPath = this.getWebDistPath();
-		const assetsUri = this.panel!.webview.asWebviewUri(vscode.Uri.file(path.join(distPath, 'assets')));
-		const faviconUri = this.panel!.webview.asWebviewUri(vscode.Uri.file(path.join(distPath, 'favicon.png')));
+		const assetsUri = this.view!.webview.asWebviewUri(vscode.Uri.file(path.join(distPath, 'assets')));
+		const faviconUri = this.view!.webview.asWebviewUri(vscode.Uri.file(path.join(distPath, 'favicon.png')));
 
 		let html = fs.readFileSync(path.join(distPath, 'index.html'), 'utf-8');
 
+		html = html.replace(/\s+crossorigin(?:="[^"]*")?/g, '');
 		html = html.replace(/src="\/assets\//g, `src="${assetsUri.toString()}/`);
 		html = html.replace(/href="\/assets\//g, `href="${assetsUri.toString()}/`);
 		html = html.replace('href="/favicon.png"', `href="${faviconUri.toString()}"`);

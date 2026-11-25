@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 
 import { InstallStamp, VerifiedArtifact, type PinnedArtifact } from './verified-artifact';
+import { ZipExtractor } from './zip-extractor';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,7 +79,7 @@ export class Sqlite3CliResolver {
 	}
 
 	private static async findOnPath(): Promise<string | null> {
-		const commands =
+		const commands: [string, string[]][] =
 			process.platform === 'win32'
 				? [
 						['where.exe', ['sqlite3']],
@@ -130,9 +131,9 @@ export class Sqlite3CliResolver {
 			onLog?.('Downloading SQLite CLI...');
 			fs.mkdirSync(extractDir, { recursive: true });
 
-			// Verified before extraction: a tampered archive never reaches unzip.
+			// Verified before extraction: a tampered archive is never unpacked.
 			await VerifiedArtifact.download(artifact, zipPath);
-			await this.extractZip(zipPath, extractDir);
+			await ZipExtractor.extract(zipPath, extractDir);
 
 			const extractedBinary = this.findExtractedBinary(extractDir);
 
@@ -158,20 +159,6 @@ export class Sqlite3CliResolver {
 		} finally {
 			fs.rmSync(stagingRoot, { recursive: true, force: true });
 		}
-	}
-
-	private static async extractZip(zipPath: string, destDir: string): Promise<void> {
-		if (process.platform === 'win32') {
-			await execFileAsync('powershell', [
-				'-NoProfile',
-				'-Command',
-				`Expand-Archive -LiteralPath ${JSON.stringify(zipPath)} -DestinationPath ${JSON.stringify(destDir)} -Force`
-			]);
-
-			return;
-		}
-
-		await execFileAsync('unzip', ['-o', zipPath, '-d', destDir]);
 	}
 
 	private static findExtractedBinary(rootDir: string): string | null {

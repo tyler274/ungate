@@ -39,6 +39,21 @@ export class RuntimeStateNormalizer {
 			};
 		}
 
+		if (parsed.success && parsed.data.autoTunnel) {
+			next.autoTunnel = {
+				...next.autoTunnel,
+				...parsed.data.autoTunnel
+			};
+		}
+
+		if (parsed.success && parsed.data.cursorProvider) {
+			next.cursorProvider = { enabled: parsed.data.cursorProvider.enabled === true };
+		}
+
+		if (parsed.success && parsed.data.tunnelProvider) {
+			next.tunnelProvider = parsed.data.tunnelProvider;
+		}
+
 		if (typeof next.api.lastSeenAt !== 'number') {
 			next.api.lastSeenAt = now;
 		}

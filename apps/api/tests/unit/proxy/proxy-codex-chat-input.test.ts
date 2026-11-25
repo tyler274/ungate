@@ -29,11 +29,14 @@ describe('proxy-codex-chat-input', () => {
 			{
 				type: 'message',
 				role: 'assistant',
-				content: [{ type: 'input_text', text: 'hello' }, { type: 'text', text: 'world' }]
+				content: [
+					{ type: 'input_text', text: 'hello' },
+					{ type: 'text', text: 'world' }
+				]
 			}
 		]);
 
-		const content = normalized[0].content as Array<Record<string, unknown>>;
+		const content = normalized[0].content as Record<string, unknown>[];
 		expect(content[0].type).toBe('output_text');
 		expect(content[1].type).toBe('output_text');
 	});
@@ -216,7 +219,10 @@ describe('proxy-codex-chat-input', () => {
 		expect(remappedId).not.toBe(overId);
 		expect(input.find((item) => item.type === 'function_call' && item.name === 'Read')?.call_id).toBe(exactId);
 		expect(input.find((item) => item.type === 'function_call' && item.name === 'Write')?.call_id).toBe(remappedId);
-		expect(input.filter((item) => item.type === 'function_call_output').map((item) => item.call_id)).toEqual([exactId, remappedId]);
+		expect(input.filter((item) => item.type === 'function_call_output').map((item) => item.call_id)).toEqual([
+			exactId,
+			remappedId
+		]);
 		expect(expanded?.map((item) => item.call_id)).toEqual([exactId, exactId, remappedId, remappedId]);
 	});
 

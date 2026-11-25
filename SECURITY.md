@@ -50,7 +50,8 @@ The proxy sits between Cursor (which calls from `api2.cursor.sh`) and three upst
 |---|---|---|
 | OAuth access and refresh tokens | `~/.ungate/data.db`, table `provider_settings` | Refresh tokens are long-lived. Compromising the SQLite file is equivalent to owning the subscription. |
 | Proxy API key | `~/.ungate/data.db`, table `app_settings.apiKey` | Anyone with the tunnel URL **and** this key can send requests through your proxy and incur provider usage. |
-| Tunnel URL | `~/.ungate/data.db` and Cloudflare's quick-tunnel subdomain | Treat as a secret. Rotating the tunnel from the dashboard invalidates the old URL. |
+| Tunnel URL | `~/.ungate/` runtime state and the tunnel provider's subdomain | Treat as a secret. Restarting a quick tunnel invalidates the old URL; a ngrok dev domain stays the same until the account changes it. |
+| ngrok authtoken | VS Code Secret Storage (`ungate.ngrokAuthToken`) | Grants control of the account's tunnel. Never written to the database or sent to the webview, which only learns whether one is saved. |
 | User OAuth flow secrets | `apps/api/src/auth/` | PKCE verifier/challenge during login; never written to disk. |
 
 ### Cursor's OpenAI API Key
@@ -59,13 +60,13 @@ Cursor periodically turns off its `OpenAI API Key` setting. Ungate restores it v
 
 ### Tunnel and proxy
 
-- **Cloudflare quick tunnel** is used by default. The tunnel URL is publicly reachable. The proxy API key is the only authentication on the public endpoint — there is no IP allowlist, no rate limit on the extension side, and no per-request attribution.
+- **Cloudflare quick tunnel** is used by default. **ngrok** is an opt-in alternative whose dev-domain URL does not rotate. Either tunnel URL is publicly reachable. The proxy API key is the only authentication on the public endpoint — there is no IP allowlist, no rate limit on the extension side, and no per-request attribution. A stable URL does not expire on restart, so rotating the proxy key matters more once ngrok is in use.
 - Anyone holding both the tunnel URL and the proxy API key can issue arbitrary completions and stream tool calls through your subscription. Rotate the proxy key from the dashboard whenever you suspect leakage.
 - The tunnel is **not** auto-started. It only comes up after explicit user action.
 
 ### Native binaries
 
-Three binaries are downloaded on first run: `better-sqlite3`, `cloudflared`, and the `sqlite3` CLI. All three go through `utils/verified-artifact.ts`:
+Four binaries are downloaded on first run: `better-sqlite3`, `cloudflared`, `ngrok` (only when ngrok mode is selected), and the `sqlite3` CLI. All four go through `utils/verified-artifact.ts`:
 
 - Pinned upstream URL per platform and (for `better-sqlite3`) Node ABI.
 - SHA-256 allowlist per platform/arch/ABI.
@@ -84,7 +85,7 @@ The extension uses a file-based runtime state in `~/.ungate/` to coordinate mult
 
 A few things look like bugs but are requirements of the providers we integrate with. Do not report them as vulnerabilities.
 
-- **Anthropic OAuth fingerprint.** The Anthropic OAuth client must match Claude Code’s expected fingerprint: `?beta=true` on the URL, `User-Agent: claude-cli/<version> (external, claude-vscode, agent-sdk/0.2.7)` where `<version>` comes from dashboard settings (`stable`, `latest`, or custom `X.Y.Z` in `app_settings`), the full `x-stainless-*` header set, `anthropic-dangerous-direct-browser-access: true`, and three `anthropic-beta` feature flags. Beta flag values and most header fields are fixed; changing them makes Anthropic reject the request. Only the `claude-cli/<version>` segment is user-configurable. See `apps/api/src/config.ts`, `RequestBuilder.getClaudeOAuthHeaders()`, and `packages/shared` (`ClaudeCliVersion`, `CLAUDE_CLI_*` constants).
+- **Anthropic OAuth fingerprint.** The Anthropic OAuth client must match Claude Code’s expected fingerprint: `?beta=true` on the URL, `User-Agent: claude-cli/<version> (external, claude-vscode)` where `<version>` comes from dashboard settings (`stable`, `latest`, or custom `X.Y.Z` in `app_settings`; latest is `2.1.322`), the full `x-stainless-*` header set, `anthropic-dangerous-direct-browser-access: true`, and the `anthropic-beta` list captured from Claude Code 2.1.322. Beta flag values and most header fields are fixed; changing them makes Anthropic reject the request. Only the `claude-cli/<version>` segment is user-configurable. See `apps/api/src/config.ts`, `apps/api/src/proxy/claude-code-packet.ts`, `RequestBuilder.getClaudeOAuthHeaders()`, and `packages/shared` (`ClaudeCliVersion`, `CLAUDE_CLI_*` constants).
 - **Cursor backend cannot reach `localhost`.** All requests must go through the tunnel. This is why Ungate ships one.
 - **`better-sqlite3` is matched against the host Node ABI**, not against Electron's. Supported Node versions are 22, 24, and 26.
 
@@ -106,7 +107,7 @@ These are documented in [README.md](README.md) and listed here so they are not r
 - **Built-in Cursor model IDs bypass the custom base URL.** Ungate can only route model IDs that the user has added as custom models in Cursor.
 - **`localhost` does not work as `OpenAI Base URL`.** Cursor's backend cannot reach it. A public tunnel is required.
 - **`better-sqlite3` binary is matched against the host Node ABI**, not against Electron's. Mismatched Node versions cause `No prebuilt binary for ABI ...`.
-- **Quick tunnels** use random Cloudflare subdomains. They are reachable to anyone who learns the URL.
+- **Quick tunnels** use random Cloudflare subdomains. They are reachable to anyone who learns the URL. An ngrok dev domain is reachable the same way and does not change when the tunnel restarts.
 - The proxy has **no per-request rate limit** on the extension side. Providers still enforce their own limits, but a leaked key can drive sustained usage.
 
 ## Published advisories

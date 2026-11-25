@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiServer } from '../../src/api-server';
+import { config } from '../../src/runtime-state/config';
 
 import { TestHelper } from './helpers/test-helper';
 
@@ -19,9 +20,9 @@ const {
 	const runtimeHasLiveClientsMock = vi.fn<(state: RuntimeState) => boolean>();
 	const runtimeMutateMock = vi.fn<(mutator: (current: RuntimeState) => RuntimeState) => Promise<RuntimeState>>();
 	const sleepMock = vi.fn<(ms: number) => Promise<void>>();
-	const ensureInstalledMock = vi.fn<() => Promise<void>>();
+	const ensureInstalledMock = vi.fn<(...args: unknown[]) => Promise<void>>();
 	const spawnSyncMock = vi.fn();
-	const spawnMock = vi.fn(() => {
+	const spawnMock = vi.fn((..._args: unknown[]) => {
 		const handlers = new Map<string, ((value?: unknown) => void)[]>();
 		const child = {
 			stderr: { on: vi.fn() },
@@ -77,7 +78,8 @@ vi.mock('../../src/utils/better-sqlite3-installer', () => {
 
 vi.mock('@ungate/shared', () => {
 	return {
-		sleep: sleepMock
+		sleep: sleepMock,
+		localApiHealthUrl: (port: number) => `http://127.0.0.1:${port}/health`
 	};
 });
 
@@ -90,9 +92,9 @@ vi.mock('vscode', () => {
 	};
 });
 
-const isApiStartSuppressedMock = vi.fn<() => boolean>(() => false);
-const suppressApiAutoStartMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
-const resetApiForRestartMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
+const isApiStartSuppressedMock = vi.fn<(...args: unknown[]) => boolean>(() => false);
+const suppressApiAutoStartMock = vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve());
+const resetApiForRestartMock = vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve());
 
 vi.mock('../../src/runtime-state', () => {
 	return {
@@ -124,8 +126,8 @@ interface ApiServerInternals {
 	shouldRespawn(): boolean;
 }
 
-function createRuntimeState(): RuntimeState {
-	const runtimeState = TestHelper.createRuntimeState([], 4783);
+function createRuntimeState(windowIds: string[] = [], apiPort: number | null = 4783): RuntimeState {
+	const runtimeState = TestHelper.createRuntimeState(windowIds, apiPort);
 
 	return runtimeState;
 }
@@ -184,7 +186,7 @@ describe('ApiServer.runHealthCheckCycle', () => {
 		sleepMock.mockReset();
 		ensureInstalledMock.mockReset();
 		spawnSyncMock.mockReset();
-		spawnSyncMock.mockImplementation((runtime, args) => {
+		spawnSyncMock.mockImplementation((_runtime, args) => {
 			if (Array.isArray(args) && args[0] === '-p' && typeof args[1] === 'string' && args[1].includes('process.execPath')) {
 				return {
 					error: undefined,
@@ -238,7 +240,48 @@ describe('ApiServer.runHealthCheckCycle', () => {
 
 		await internals.runHealthCheckCycle();
 
-		expect(onStatusChange).not.toHaveBeenCalledWith('stopped');
+		expect(onStatusChange).not.toHaveBeenCalled();
+		expect(suppressApiAutoStartMock).not.toHaveBeenCalled();
+		expect(internals.port).toBe(4783);
+	});
+
+	it('does not latch auto-start after repeated health-check misses', async () => {
+		const runtimeState = createRuntimeState();
+		const { server, onStatusChange, onLog } = createServer();
+		const internals = getInternals(server);
+		runtimeReadMock.mockReturnValue(runtimeState);
+		runtimeHasLiveClientsMock.mockReturnValue(true);
+		runtimeMutateMock.mockImplementation((mutator) => {
+			const nextState = mutator(structuredClone(runtimeState));
+
+			return Promise.resolve(nextState);
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => {
+				return Promise.reject(new Error('connection refused'));
+			})
+		);
+
+		Object.assign(internals, {
+			port: 4783,
+			lastStatus: 'running',
+			process: null
+		});
+
+		for (let attempt = 0; attempt < config.apiServer.healthCheckFailureLimit - 1; attempt += 1) {
+			await internals.runHealthCheckCycle();
+		}
+
+		expect(onStatusChange).not.toHaveBeenCalled();
+		expect(suppressApiAutoStartMock).not.toHaveBeenCalled();
+
+		await internals.runHealthCheckCycle();
+
+		expect(suppressApiAutoStartMock).not.toHaveBeenCalled();
+		expect(onStatusChange).toHaveBeenCalledWith('error');
+		expect(onLog).toHaveBeenCalledWith('error', '[process] health check failed');
+		expect(internals.port).toBeNull();
 	});
 
 	it('attaches to an existing healthy api without spawning a new process', async () => {
@@ -568,11 +611,13 @@ describe('ApiServer.onExit', () => {
 			shutDownDeliberately: false,
 			process: null
 		});
+		suppressApiAutoStartMock.mockClear();
 
 		internals.onExit(1, null);
 		await flushPromises();
 
 		expect(onStatusChange).toHaveBeenCalledWith('error');
+		expect(suppressApiAutoStartMock).not.toHaveBeenCalled();
 	});
 
 	it('does not respawn after a clean exit when extension host is inactive', async () => {

@@ -1,7 +1,10 @@
 import type {
 	runtimeApiStateSchema,
+	runtimeAutoTunnelStateSchema,
 	runtimeApiStatusSchema,
 	runtimeClientEntrySchema,
+	runtimeCursorProviderStateSchema,
+	runtimeTunnelProviderSchema,
 	runtimeCommandActionSchema,
 	runtimeCommandSchema,
 	runtimeLogLevelSchema,
@@ -19,4 +22,7 @@ export type RuntimeClientEntry = z.infer<typeof runtimeClientEntrySchema>;
 export type RuntimeCommand = z.infer<typeof runtimeCommandSchema>;
 export type RuntimeApiState = z.infer<typeof runtimeApiStateSchema>;
 export type RuntimeTunnelState = z.infer<typeof runtimeTunnelStateSchema>;
+export type RuntimeAutoTunnelState = z.infer<typeof runtimeAutoTunnelStateSchema>;
+export type RuntimeCursorProviderState = z.infer<typeof runtimeCursorProviderStateSchema>;
+export type TunnelProvider = z.infer<typeof runtimeTunnelProviderSchema>;
 export type RuntimeState = z.infer<typeof runtimeStateSchema>;

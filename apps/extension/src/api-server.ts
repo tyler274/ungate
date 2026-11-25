@@ -2,7 +2,7 @@ import * as cp from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { sleep, type ApiStatus as ServerStatus, type LogEntry } from '@ungate/shared';
+import { localApiHealthUrl, sleep, type ApiStatus as ServerStatus, type LogEntry } from '@ungate/shared';
 import * as vscode from 'vscode';
 
 import { RuntimeStateStore } from './runtime-state';
@@ -10,8 +10,7 @@ import { config } from './runtime-state/config';
 import { BetterSqlite3Installer } from './utils/better-sqlite3-installer';
 import { NodeResolver } from './utils/node-resolver';
 
-const HEALTH_CHECK_URL = (port: number) => `http://localhost:${port}/health`;
-const STARTING_STATE_TIMEOUT_MS = 10000;
+const HEALTH_CHECK_URL = localApiHealthUrl;
 
 interface ApiServerCallbacks {
 	onLog(level: LogEntry['level'], message: string): void;
@@ -20,6 +19,8 @@ interface ApiServerCallbacks {
 	isLeaderWindow(): boolean;
 	isExtensionHostActive(): boolean;
 	getWindowId(): string;
+	/** Called with the API child this window spawned (IPC channel attached). An adopted API serves a socket instead. */
+	onChildSpawned?(child: cp.ChildProcess): void;
 }
 
 export class ApiServer {
@@ -35,6 +36,7 @@ export class ApiServer {
 	private addressInUsePort: number | null = null;
 	private startPromise: Promise<void> | null = null;
 	private restartInProgress = false;
+	private healthMisses = 0;
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -111,6 +113,11 @@ export class ApiServer {
 		return this.port;
 	}
 
+	/** This window spawned the running API, so its IPC channel carries the Cursor bridge. */
+	spawnedApi(): boolean {
+		return this.process !== null;
+	}
+
 	syncLeaderHealthMonitor(isLeader: boolean): void {
 		if (!isLeader) {
 			this.stopHealthCheck();
@@ -149,7 +156,7 @@ export class ApiServer {
 		if (runtimeState.api.status === 'starting' && runtimeState.api.ownerWindowId !== this.callbacks.getWindowId()) {
 			const startingStateAge = Date.now() - runtimeState.api.lastSeenAt;
 
-			if (startingStateAge < STARTING_STATE_TIMEOUT_MS) {
+			if (startingStateAge < config.apiServer.startingStateTimeoutMs) {
 				return;
 			}
 		}
@@ -203,8 +210,12 @@ export class ApiServer {
 
 		this.callbacks.onLog('info', `[process] starting api via ${runtime}`);
 
-		this.process = cp.spawn(runtime, nodeArgs, { cwd, env, stdio: 'pipe', detached: true });
+		// The extra `ipc` slot is the private Cursor bridge channel. Unref it too so the detached
+		// child keeps not holding the extension host open.
+		this.process = cp.spawn(runtime, nodeArgs, { cwd, env, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], detached: true });
 		this.process.unref();
+		(this.process.channel as { unref?: () => void } | undefined)?.unref?.();
+		this.callbacks.onChildSpawned?.(this.process);
 		void this.writeRuntimeState('starting', null).catch(() => {});
 
 		this.process.stdout?.on('data', (data: Buffer) => this.onStdout(data));
@@ -318,7 +329,15 @@ export class ApiServer {
 
 		const message = `[process] exit code=${code} signal=${signal}`;
 
-		void this.recordApiFailure(message).catch(() => {});
+		// A crash is not a spawn that cannot run. Leave start unlatched so the leader can start again.
+		this.callbacks.onLog('error', message);
+		this.lastStatus = 'error';
+		this.port = null;
+		void this.writeRuntimeState('error', message)
+			.then(() => {
+				this.callbacks.onStatusChange('error');
+			})
+			.catch(() => {});
 	}
 
 	private shouldRespawn(): boolean {
@@ -351,6 +370,7 @@ export class ApiServer {
 
 	private startHealthCheck(): void {
 		this.stopHealthCheck();
+		this.healthMisses = 0;
 
 		this.healthCheckTimer = setInterval(() => {
 			void this.runHealthCheckCycle().catch(() => {});
@@ -389,25 +409,65 @@ export class ApiServer {
 			return;
 		}
 
+		const healthy = await this.probeHealth(this.port);
+
+		if (healthy) {
+			this.healthMisses = 0;
+			const wasDown = this.lastStatus !== 'running';
+
+			await this.setStatus('running');
+
+			if (wasDown) {
+				this.callbacks.onPortDetected(this.port);
+			}
+
+			return;
+		}
+
+		this.healthMisses += 1;
+
+		if (this.healthMisses < config.apiServer.healthCheckFailureLimit) {
+			this.callbacks.onLog(
+				'warn',
+				`[process] health check missed (${this.healthMisses}/${config.apiServer.healthCheckFailureLimit})`
+			);
+
+			return;
+		}
+
+		await this.notePersistentHealthFailure('[process] health check failed');
+	}
+
+	private async probeHealth(port: number): Promise<boolean> {
 		try {
-			const res = await fetch(HEALTH_CHECK_URL(this.port), {
+			const response = await fetch(HEALTH_CHECK_URL(port), {
 				signal: AbortSignal.timeout(config.apiServer.healthCheckRequestTimeoutMs)
 			});
 
-			if (res.ok) {
-				const wasDown = this.lastStatus !== 'running';
-
-				await this.setStatus('running');
-
-				if (wasDown) {
-					this.callbacks.onPortDetected(this.port);
-				}
-			} else {
-				await this.recordApiFailure(`[process] health check failed with status ${res.status}`);
-			}
+			return response.ok;
 		} catch {
-			await this.recordApiFailure('[process] health check failed');
+			return false;
 		}
+	}
+
+	/**
+	 * The API stopped answering. Leave startSuppressed alone so the leader can
+	 * start it again. That latch is reserved for a spawn that cannot run.
+	 */
+	private async notePersistentHealthFailure(message: string): Promise<void> {
+		this.healthMisses = 0;
+		this.lastStatus = 'error';
+		this.callbacks.onLog('error', message);
+
+		if (this.process) {
+			this.shutDownDeliberately = true;
+			this.process.kill();
+			this.process = null;
+		}
+
+		this.port = null;
+		await this.writeRuntimeState('error', message);
+		this.callbacks.onStatusChange('error');
 	}
 
 	private stopHealthCheck(): void {

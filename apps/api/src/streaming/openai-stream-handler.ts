@@ -2,17 +2,34 @@ import { logger } from 'src/utils/logger';
 
 import { AnthropicToOpenai } from '../adapter/anthropic-to-openai';
 import { Requests } from '../database/requests';
+import { RequestHeuristics } from '../metrics/request-heuristics';
 import { ToolNormalizer } from '../tools/normalizer';
 import { type ToolUseBlock, type StreamResult, type RequestContext } from '../types/proxy';
 
-import type { AnthropicStopReason, AnthropicStreamEvent } from '../types/anthropic-stream';
+import { readWithin, UPSTREAM_IDLE_TIMEOUT_MS, UpstreamIdle } from './sse-tap';
 
-interface StreamHandlerOptions {
+import type { AnthropicStopReason, AnthropicStreamEvent } from '../types/anthropic-stream';
+import type { RequestRecord, StopReason } from '@ungate/shared';
+
+export interface StreamTimingOptions {
+	keepaliveIntervalMs: number;
+	upstreamIdleTimeoutMs: number;
+}
+
+interface StreamHandlerOptions extends StreamTimingOptions {
 	reader: ReadableStreamDefaultReader<Uint8Array>;
 	streamId: string;
 	modelName: string;
 	context: RequestContext;
 }
+
+// Cursor's backend aborts a completion after ~125s without a chunk. Thinking is not
+// forwarded and tool arguments are buffered, so send empty deltas while Claude works.
+// Abort only when the upstream sends no bytes at all; there is no total-duration cap.
+export const DEFAULT_STREAM_TIMING: StreamTimingOptions = {
+	keepaliveIntervalMs: 15_000,
+	upstreamIdleTimeoutMs: UPSTREAM_IDLE_TIMEOUT_MS
+};
 
 interface ActiveToolCall {
 	id: string;
@@ -30,7 +47,13 @@ interface StreamUsage {
 }
 
 export class OpenAIStreamHandler {
-	static createStreamResponse(response: Response, streamId: string, modelName: string, context: RequestContext): StreamResult {
+	static createStreamResponse(
+		response: Response,
+		streamId: string,
+		modelName: string,
+		context: RequestContext,
+		timing: Partial<StreamTimingOptions> = {}
+	): StreamResult {
 		const headers: Record<string, string> = {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache',
@@ -46,16 +69,51 @@ export class OpenAIStreamHandler {
 			throw new Error('No response body');
 		}
 
-		const stream = this.createStream({ reader, streamId, modelName, context });
+		const stream = this.createStream({ reader, streamId, modelName, context, ...DEFAULT_STREAM_TIMING, ...timing });
 
 		return { stream, headers };
 	}
 
 	private static createStream(options: StreamHandlerOptions): ReadableStream {
-		const { reader, streamId, modelName, context } = options;
+		const { reader, streamId, modelName, context, keepaliveIntervalMs, upstreamIdleTimeoutMs } = options;
 
 		let cancelled = false;
+		let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+		let finalized = false;
+		let stopReason: AnthropicStopReason | null = null;
+		let finalUsage: StreamUsage | null = null;
+		let firstTokenAt: number | null = null;
+		let reasoningChars = 0;
+		const toolNames: string[] = [];
 		const activeToolCalls = new Map<number, ActiveToolCall>();
+
+		const stopKeepalive = () => {
+			if (keepaliveTimer) {
+				clearInterval(keepaliveTimer);
+				keepaliveTimer = null;
+			}
+		};
+
+		/** One analytics row per stream, merged with router/account telemetry. */
+		const record = (fields: Pick<RequestRecord, 'source' | 'error'>, outcome: StopReason) => {
+			Requests.record({
+				...context.telemetry,
+				model: context.model,
+				source: fields.source,
+				inputTokens: finalUsage?.input_tokens ?? 0,
+				outputTokens: finalUsage?.output_tokens ?? 0,
+				cacheReadTokens: finalUsage?.cache_read_input_tokens ?? null,
+				cacheCreationTokens: finalUsage?.cache_creation_input_tokens ?? null,
+				reasoningChars: reasoningChars || null,
+				stopReason: outcome,
+				toolCallCount: toolNames.length,
+				toolNames,
+				stream: true,
+				latencyMs: Date.now() - context.startTime,
+				firstTokenMs: firstTokenAt ? firstTokenAt - context.startTime : null,
+				error: fields.error ?? null
+			});
+		};
 
 		const describeOpenTools = (): string => {
 			if (activeToolCalls.size === 0) {
@@ -74,20 +132,59 @@ export class OpenAIStreamHandler {
 				let sentStart = false;
 				let nextToolCallIndex = 0;
 				let completedToolCallCount = 0;
-				let finalized = false;
-				let stopReason: AnthropicStopReason | null = null;
-				let finalUsage: StreamUsage | null = null;
 				let salvageFailed = false;
+				const streamStartedAt = Date.now();
+				let lastEmitAt = streamStartedAt;
+				let lastUpstreamAt = streamStartedAt;
+				let maxUpstreamGapMs = 0;
+				let abortReason: string | null = null;
+
+				// Cancelling the reader unblocks a pending read; the loop then finishes as incomplete.
+				const abortUpstream = (reason: string) => {
+					if (abortReason || finalized || cancelled) {
+						return;
+					}
+
+					abortReason = reason;
+					stopKeepalive();
+					logger.error(`Aborting upstream stream id=${streamId} reason=${reason} ${describeOpenTools()}`);
+					reader.cancel(new Error(reason)).catch(() => {});
+				};
+				let failed = false;
 
 				const safeEnqueue = (data: Uint8Array) => {
 					try {
 						if (!cancelled) {
 							controller.enqueue(data);
+							lastEmitAt = Date.now();
 						}
 					} catch {
 						cancelled = true;
 					}
 				};
+
+				if (keepaliveIntervalMs > 0) {
+					keepaliveTimer = setInterval(() => {
+						if (cancelled || finalized || abortReason) {
+							stopKeepalive();
+
+							return;
+						}
+
+						if (Date.now() - lastEmitAt < keepaliveIntervalMs) {
+							return;
+						}
+
+						if (!sentStart) {
+							safeEnqueue(new TextEncoder().encode(AnthropicToOpenai.streamStart(streamId, modelName)));
+							sentStart = true;
+
+							return;
+						}
+
+						safeEnqueue(new TextEncoder().encode(AnthropicToOpenai.streamChunk(streamId, modelName, '')));
+					}, keepaliveIntervalMs);
+				}
 
 				const flushToolCall = (toolCall: ActiveToolCall, mode: 'complete' | 'salvage'): boolean => {
 					if (mode === 'salvage' && !toolCall.inputJson) {
@@ -154,15 +251,44 @@ export class OpenAIStreamHandler {
 					return 'stop';
 				};
 
+				/**
+				 * Upstream `event: error` after HTTP 200 (post-commit): never replayed. The client gets an
+				 * OpenAI-style error event instead of a synthetic finish_reason/[DONE], and the request is
+				 * recorded once as failed.
+				 */
+				const failStream = (error: Record<string, unknown> | undefined) => {
+					if (finalized || cancelled) {
+						return;
+					}
+
+					finalized = true;
+					const type = typeof error?.type === 'string' && error.type ? error.type : 'api_error';
+					const message = typeof error?.message === 'string' && error.message ? error.message : 'Upstream stream error';
+
+					logger.error(`Upstream stream error type=${type} id=${streamId} ${describeOpenTools()}`);
+					activeToolCalls.clear();
+
+					try {
+						context.onStreamError?.(error);
+					} catch (hookError) {
+						logger.error(`Stream error hook failed: ${String(hookError)}`);
+					}
+
+					safeEnqueue(new TextEncoder().encode(`data: ${JSON.stringify({ error: { message, type, code: type } })}\n\n`));
+
+					record({ source: 'error', error: message.slice(0, 500) }, 'error');
+				};
+
 				const finalizeStream = (unexpectedEof: boolean) => {
 					if (finalized || cancelled) {
 						return;
 					}
 
 					finalized = true;
+					stopKeepalive();
 
 					logger.log(
-						`Stream stop_reason=${stopReason ?? 'none'} unexpectedEof=${unexpectedEof} completedToolCalls=${completedToolCallCount}`
+						`Stream stop_reason=${stopReason ?? 'none'} unexpectedEof=${unexpectedEof} completedToolCalls=${completedToolCallCount} maxUpstreamGapMs=${maxUpstreamGapMs}`
 					);
 
 					if (unexpectedEof && activeToolCalls.size > 0) {
@@ -184,20 +310,13 @@ export class OpenAIStreamHandler {
 								})
 							)
 						);
-
-						Requests.record(
-							{
-								model: context.model,
-								source: context.source,
-								inputTokens: finalUsage.input_tokens,
-								outputTokens: finalUsage.output_tokens,
-								stream: true,
-								latencyMs: Date.now() - context.startTime
-							},
-							finalUsage.cache_read_input_tokens,
-							finalUsage.cache_creation_input_tokens
-						);
 					}
+
+					// Previously a stream without usage left no row; record it so truncations are visible.
+					let outcome: StopReason = RequestHeuristics.normalizeStopReason(stopReason ?? finishReason);
+					if (unexpectedEof) outcome = 'error';
+					else if (finishReason === 'length') outcome = 'max_tokens';
+					record({ source: context.source }, outcome);
 
 					safeEnqueue(new TextEncoder().encode('data: [DONE]\n\n'));
 				};
@@ -206,7 +325,17 @@ export class OpenAIStreamHandler {
 					while (true) {
 						if (cancelled) break;
 
-						const { done, value } = await reader.read();
+						let chunk: ReadableStreamReadResult<Uint8Array>;
+						try {
+							chunk = await readWithin(reader, upstreamIdleTimeoutMs);
+						} catch (readError) {
+							if (!(readError instanceof UpstreamIdle)) throw readError;
+							// Silent upstream: cut it and end the stream as incomplete.
+							abortUpstream(readError.message);
+							finalizeStream(true);
+							break;
+						}
+						const { done, value } = chunk;
 
 						if (cancelled) break;
 						if (done) {
@@ -214,6 +343,9 @@ export class OpenAIStreamHandler {
 							break;
 						}
 
+						const receivedAt = Date.now();
+						maxUpstreamGapMs = Math.max(maxUpstreamGapMs, receivedAt - lastUpstreamAt);
+						lastUpstreamAt = receivedAt;
 						buffer += decoder.decode(value, { stream: true });
 						const lines = buffer.split('\n');
 						buffer = lines.pop() ?? '';
@@ -231,6 +363,12 @@ export class OpenAIStreamHandler {
 							try {
 								const event = JSON.parse(data) as AnthropicStreamEvent;
 
+								if (event.type === 'error') {
+									failStream(event.error as Record<string, unknown> | undefined);
+									failed = true;
+									break;
+								}
+
 								if (event.type === 'message_start' && !sentStart) {
 									safeEnqueue(new TextEncoder().encode(AnthropicToOpenai.streamStart(streamId, modelName)));
 									sentStart = true;
@@ -246,6 +384,8 @@ export class OpenAIStreamHandler {
 
 									if (block?.type === 'tool_use') {
 										const originalName = context.reverseToolMapping[block.name] ?? block.name;
+										toolNames.push(originalName);
+										firstTokenAt ??= Date.now();
 										const toolCall: ActiveToolCall = {
 											id: block.id,
 											name: originalName,
@@ -287,7 +427,22 @@ export class OpenAIStreamHandler {
 									}
 								}
 
+								if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta.thinking) {
+									firstTokenAt ??= Date.now();
+									reasoningChars += event.delta.thinking.length;
+
+									if (!sentStart) {
+										safeEnqueue(new TextEncoder().encode(AnthropicToOpenai.streamStart(streamId, modelName)));
+										sentStart = true;
+									}
+
+									safeEnqueue(
+										new TextEncoder().encode(AnthropicToOpenai.reasoningChunk(streamId, modelName, event.delta.thinking))
+									);
+								}
+
 								if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta?.text) {
+									firstTokenAt ??= Date.now();
 									if (!sentStart) {
 										safeEnqueue(new TextEncoder().encode(AnthropicToOpenai.streamStart(streamId, modelName)));
 										sentStart = true;
@@ -339,6 +494,8 @@ export class OpenAIStreamHandler {
 								}
 							}
 						}
+
+						if (failed) break;
 					}
 				} catch (streamError) {
 					if (!cancelled) {
@@ -353,6 +510,11 @@ export class OpenAIStreamHandler {
 							});
 						}
 
+						if (!finalized) {
+							finalized = true;
+							record({ source: 'error', error: `Stream processing failed: ${errorStr}`.slice(0, 500) }, 'error');
+						}
+
 						try {
 							controller.error(streamError);
 						} catch {
@@ -360,6 +522,8 @@ export class OpenAIStreamHandler {
 						}
 					}
 				} finally {
+					stopKeepalive();
+
 					try {
 						if (!cancelled) reader.cancel().catch(() => {});
 					} catch {
@@ -375,7 +539,12 @@ export class OpenAIStreamHandler {
 			},
 			cancel(reason) {
 				cancelled = true;
+				stopKeepalive();
 				logger.error(`Downstream cancelled stream id=${streamId} reason=${String(reason)} ${describeOpenTools()}`);
+				if (!finalized) {
+					finalized = true;
+					record({ source: context.source, error: 'Client cancelled stream' }, 'aborted');
+				}
 				reader.cancel(reason).catch(() => {});
 			}
 		});

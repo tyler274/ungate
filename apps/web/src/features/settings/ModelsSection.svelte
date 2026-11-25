@@ -48,6 +48,20 @@ const serviceTierOptions: { label: string; value: ModelMappingConfig['serviceTie
 	{ label: 'Fast / Priority', value: 'priority' }
 ];
 
+const toolModeOptions: { label: string; value: ModelMappingConfig['toolMode'] }[] = [
+	{ label: 'Auto', value: null },
+	{ label: 'Structured', value: 'structured' },
+	{ label: 'Embedded', value: 'embedded' }
+];
+
+const upstreamPlaceholders: Record<ModelMappingProvider, string> = {
+	claude: 'claude-sonnet-4-6',
+	openai: 'gpt-5.6',
+	minimax: 'MiniMax-M2.7',
+	cursor: 'grok-4.7-low-fast',
+	gemini: 'gemini-4-carbon'
+};
+
 function commit(nextModels: ModelMappingConfig[]) {
 	formStore.setModels(nextModels);
 }
@@ -80,6 +94,16 @@ function modelTitle(item: VisibleModelItem): string {
 	}
 
 	return `Model ${item.index + 1}`;
+}
+
+function modelSlug(item: VisibleModelItem): string {
+	const slug = item.model.id.trim();
+
+	if (!slug || slug === modelTitle(item)) {
+		return '';
+	}
+
+	return slug;
 }
 
 function modelSelectionId(item: VisibleModelItem): string {
@@ -117,7 +141,8 @@ function addModel() {
 			upstreamModel: '',
 			sortOrder: formStore.models.length,
 			reasoningBudget: null,
-			serviceTier: null
+			serviceTier: null,
+			toolMode: null
 		}
 	]);
 
@@ -171,6 +196,10 @@ function updateModelAtIndex(index: number, key: keyof ModelMappingConfig, value:
 				}
 
 				return { ...model, reasoningBudget: null };
+			}
+
+			if (key === 'toolMode') {
+				return { ...model, toolMode: value === 'structured' || value === 'embedded' ? value : null };
 			}
 
 			if (key === 'serviceTier') {
@@ -286,7 +315,12 @@ $effect(() => {
 								? 'preset-filled-primary-500 border-primary-500/50'
 								: 'preset-tonal-surface border-surface-600 hover:border-surface-400 hover:preset-filled-surface-500'}"
 							onclick={() => setActiveModel(item.index)}>
-							{modelTitle(item)}
+							<span class="flex min-w-0 flex-col items-start text-left leading-tight">
+								<span>{modelTitle(item)}</span>
+								{#if modelSlug(item)}
+									<span class="font-mono text-[10px] opacity-80">{modelSlug(item)}</span>
+								{/if}
+							</span>
 						</button>
 					{/each}
 				</div>
@@ -298,7 +332,12 @@ $effect(() => {
 				{@const index = activeItem.index}
 				<div class="card preset-tonal-surface border border-surface-700/30 p-4 space-y-3">
 					<div class="flex items-center justify-between gap-3">
-						<p class="text-sm font-medium">{modelTitle(activeItem)}</p>
+						<div class="min-w-0">
+							<p class="text-sm font-medium">{modelTitle(activeItem)}</p>
+							{#if modelSlug(activeItem)}
+								<p class="truncate font-mono text-xs text-surface-400">{modelSlug(activeItem)}</p>
+							{/if}
+						</div>
 						<div class="flex items-center gap-2">
 							<button
 								class="btn btn-sm preset-outlined-surface-700 hover:preset-filled-surface-500"
@@ -319,7 +358,9 @@ $effect(() => {
 					</div>
 
 					<div
-						class="grid grid-cols-1 gap-4 {selectedProvider === 'openai' ? 'xl:grid-cols-5' : 'xl:grid-cols-4'} md:grid-cols-2">
+						class="grid grid-cols-1 gap-4 {selectedProvider === 'openai' || selectedProvider === 'cursor'
+							? 'xl:grid-cols-5'
+							: 'xl:grid-cols-4'} md:grid-cols-2">
 						<label class="label">
 							<span class="label-text text-xs">Model ID</span>
 							<input
@@ -347,7 +388,7 @@ $effect(() => {
 								type="text"
 								value={model.upstreamModel}
 								oninput={(event) => updateModelAtIndex(index, 'upstreamModel', inputValue(event))}
-								placeholder={selectedProvider === 'minimax' ? 'MiniMax-M2.7' : 'claude-sonnet-4-6'} />
+								placeholder={upstreamPlaceholders[selectedProvider]} />
 						</label>
 
 						<label class="label">
@@ -369,6 +410,32 @@ $effect(() => {
 								<span class="text-xs text-surface-400 mt-1">Only supported by GPT-5.6 models.</span>
 							{/if}
 						</label>
+
+						{#if selectedProvider === 'cursor'}
+							<label class="label">
+								<span class="label-text text-xs">Tool Schema Mode</span>
+								<select
+									class="select text-sm"
+									value={model.toolMode ?? ''}
+									onchange={(event) => {
+										const value = selectValue(event);
+										updateModelAtIndex(index, 'toolMode', value ? value : null);
+									}}>
+									{#each toolModeOptions as option}
+										<option value={option.value ?? ''}>{option.label}</option>
+									{/each}
+								</select>
+								<span class="text-xs text-surface-400 mt-1">
+									{#if model.toolMode === 'embedded'}
+										JSON Schema sent in the tool description (needed by Grok).
+									{:else if model.toolMode === 'structured'}
+										JSON Schema sent as tool parameters.
+									{:else}
+										Embedded for Grok, structured for other models.
+									{/if}
+								</span>
+							</label>
+						{/if}
 
 						{#if selectedProvider === 'openai'}
 							<label class="label">

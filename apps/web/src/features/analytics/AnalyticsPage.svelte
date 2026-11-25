@@ -6,7 +6,9 @@ import IconTrash2 from 'virtual:icons/lucide/trash-2';
 import { PERIODS } from '$shared/constants';
 import { Formatter } from '$shared/formatter';
 
+import InsightsSection from './insights/InsightsSection.svelte';
 import { getAnalyticsStore } from './analytics-store.svelte';
+import ClientUsageTable from './ClientUsageTable.svelte';
 import RequestList from './RequestList.svelte';
 import StatCard from './StatCard.svelte';
 import TokenChart from './TokenChart.svelte';
@@ -82,6 +84,18 @@ function handleConfirmReset() {
 				label={getProviderLabel('openai')}
 				value={Formatter.number(store.summary.openaiRequests)}
 				variant="success" />
+			{#if store.summary.cursorRequests}
+				<StatCard
+					label={getProviderLabel('cursor')}
+					value={Formatter.number(store.summary.cursorRequests)}
+					variant="success" />
+			{/if}
+			{#if store.summary.geminiRequests}
+				<StatCard
+					label={getProviderLabel('gemini')}
+					value={Formatter.number(store.summary.geminiRequests)}
+					variant="success" />
+			{/if}
 			<StatCard
 				label="Errors"
 				value={Formatter.number(store.summary.errorRequests)}
@@ -91,6 +105,10 @@ function handleConfirmReset() {
 		<TokenChart
 			series={store.tokenSeries}
 			period={store.period} />
+
+		<ClientUsageTable clients={store.clientUsage} />
+
+		<InsightsSection />
 	{/if}
 
 	<RequestList />

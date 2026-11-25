@@ -4,7 +4,9 @@ import { CompletionModelRouting } from 'src/orchestration/openai';
 
 import type { ModelMappingConfig } from '@ungate/shared';
 
-function mapping(partial: Partial<ModelMappingConfig> & Pick<ModelMappingConfig, 'provider' | 'upstreamModel'>): ModelMappingConfig {
+function mapping(
+	partial: Partial<ModelMappingConfig> & Pick<ModelMappingConfig, 'provider' | 'upstreamModel'>
+): ModelMappingConfig {
 	return {
 		id: partial.id ?? 'id',
 		label: partial.label ?? 'label',
@@ -45,6 +47,17 @@ describe('CompletionModelRouting', () => {
 		expect(CompletionModelRouting.isOpenAiMapped(mapping({ provider: 'claude', upstreamModel: 'c' }))).toBe(false);
 	});
 
+	it('narrows gemini mapping with isGeminiMapped and never infers it from the model name', () => {
+		const gemini = mapping({ id: 'ungate-gemini-4-carbon-medium', provider: 'gemini', upstreamModel: 'gemini-4-carbon' });
+
+		expect(CompletionModelRouting.isGeminiMapped(gemini)).toBe(true);
+		expect(CompletionModelRouting.isGeminiMapped(null)).toBe(false);
+		expect(CompletionModelRouting.isGeminiMapped(mapping({ provider: 'openai', upstreamModel: 'gemini-4-carbon' }))).toBe(false);
+		expect(CompletionModelRouting.isOpenAiMapped(gemini)).toBe(false);
+		expect(CompletionModelRouting.isCursorMapped(gemini)).toBe(false);
+		expect(CompletionModelRouting.shouldRouteMiniMax(gemini, 'ungate-gemini-4-carbon-medium')).toBe(false);
+	});
+
 	it('builds openai upstream body with optional reasoning effort and service tier', () => {
 		const body = { model: 'alias', messages: [], stream: false } as const;
 		const openai = mapping({
@@ -65,5 +78,21 @@ describe('CompletionModelRouting', () => {
 		expect(plain.model).toBe('gpt-2');
 		expect('reasoning' in plain).toBe(false);
 		expect('service_tier' in plain).toBe(false);
+	});
+
+	it('keeps GPT-6 Astra on its upstream id when the custom id is ungate-astra-medium', () => {
+		const body = { model: 'ungate-astra-medium', messages: [], stream: true } as const;
+		const astra = mapping({
+			id: 'ungate-astra-medium',
+			provider: 'openai',
+			upstreamModel: 'gpt-6-astra',
+			reasoningBudget: 'high',
+			serviceTier: 'default'
+		});
+		const upstream = CompletionModelRouting.buildOpenAiUpstreamBody(body as never, astra);
+
+		expect(upstream.model).toBe('gpt-6-astra');
+		expect(upstream.reasoning).toEqual({ effort: 'high' });
+		expect(upstream.service_tier).toBe('default');
 	});
 });

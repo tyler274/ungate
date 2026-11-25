@@ -2,7 +2,7 @@
 	"name": "ungate",
 	"displayName": "Ungate",
 	"description": "Use Claude, GPT, or MiniMax subscriptions in Cursor instead of paying for API tokens",
-	"version": "1.7.14",
+	"version": "1.7.15",
 	"publisher": "orchidfiles",
 	"license": "MIT",
 	"pricing": "Free",
@@ -42,7 +42,29 @@
 	],
 	"main": "./dist/extension.js",
 	"contributes": {
+		"viewsContainers": {
+			"panel": [
+				{
+					"id": "ungate",
+					"title": "Ungate",
+					"icon": "resources/icon.png"
+				}
+			]
+		},
+		"views": {
+			"ungate": [
+				{
+					"type": "webview",
+					"id": "ungate.dashboard",
+					"name": "Dashboard"
+				}
+			]
+		},
 		"commands": [
+			{
+				"command": "ungate.diagnoseCursorCapabilities",
+				"title": "Ungate: Diagnose Cursor Subscription Capabilities (Local Only)"
+			},
 			{
 				"command": "ungate.openDashboard",
 				"title": "Ungate: Open Dashboard"
@@ -58,6 +80,10 @@
 			{
 				"command": "ungate.toggleKeyFix",
 				"title": "Ungate: Toggle OpenAI Key Fix"
+			},
+			{
+				"command": "ungate.toggleAutoTunnel",
+				"title": "Ungate: Toggle Auto-start Tunnel"
 			}
 		]
 	},
@@ -66,7 +92,8 @@
 		"publish": "ovsx publish out/ungate.vsix",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix",
-		"test": "vitest run"
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit -p ."
 	},
 	"dependencies": {
 		"@ungate/shared": "workspace:*",
@@ -76,6 +103,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "~22.15.35",
+		"@types/tar": "~6.1.13",
 		"@types/vscode": "~1.96.0",
 		"@ungate/dev-kit": "workspace:*",
 		"@vscode/vsce": "~3.2.0",

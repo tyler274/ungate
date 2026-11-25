@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
 	ClaudeCliVersion,
 	isClaudeCliVersionMode,
+	isCursorToolMode,
 	isModelMappingProvider,
 	isModelServiceTier,
 	isReasoningBudgetTier,
@@ -10,8 +11,10 @@ import {
 } from '@ungate/shared';
 
 import { Settings } from '../database/app-settings';
+import { DuplicateModelIdError } from '../database/model-mappings';
 import { logger } from '../utils/logger';
 
+import type { Config } from '../config';
 import type { FastifyPluginCallback } from 'fastify';
 
 const ModelMappingUpdateSchema = z
@@ -19,7 +22,7 @@ const ModelMappingUpdateSchema = z
 		id: z.string(),
 		label: z.string(),
 		provider: z.string().refine((value) => isModelMappingProvider(value), {
-			message: 'Model provider must be claude, openai or minimax'
+			message: 'Model provider must be claude, openai, minimax, cursor or gemini'
 		}),
 		upstreamModel: z.string(),
 		sortOrder: z.number().int(),
@@ -29,6 +32,9 @@ const ModelMappingUpdateSchema = z
 		]),
 		serviceTier: z
 			.union([z.null(), z.string().refine((value) => isModelServiceTier(value), { message: 'Invalid serviceTier' })])
+			.default(null),
+		toolMode: z
+			.union([z.null(), z.string().refine((value) => isCursorToolMode(value), { message: 'Invalid toolMode' })])
 			.default(null)
 	})
 	.strip();
@@ -94,7 +100,24 @@ const plugin: FastifyPluginCallback = (app) => {
 			return reply.code(400).send({ ok: false, error: validation.error });
 		}
 
-		Settings.update(validation.value);
+		try {
+			Settings.update(validation.value);
+		} catch (error) {
+			if (error instanceof DuplicateModelIdError) {
+				logger.error(`Settings update failed: ${error.message}`);
+
+				return reply.code(400).send({ ok: false, error: error.message });
+			}
+
+			throw error;
+		}
+
+		// The model routes read the key from the running config on every request, so a rotated
+		// key takes effect now, including in a service the extension adopted and cannot restart.
+		if (validation.value.apiKey !== undefined) {
+			const running: Config = app.config;
+			running.apiKey = validation.value.apiKey ?? undefined;
+		}
 
 		return reply.send({ ok: true });
 	});

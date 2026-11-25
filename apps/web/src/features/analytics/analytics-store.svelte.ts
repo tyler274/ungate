@@ -2,6 +2,7 @@ import {
 	detectProviderBySourceOrModel,
 	getProviderLabel,
 	type AnalyticsSummary,
+	type ClientUsage,
 	type ModelMappingProvider,
 	type Period,
 	type RequestRecord,
@@ -12,11 +13,14 @@ import { SvelteSet } from 'svelte/reactivity';
 import { Api } from '$shared/api';
 import { DEFAULTS } from '$shared/constants';
 
+import { insightsStore } from './insights/insights-store.svelte';
+
 interface AnalyticsStore {
 	readonly summary: AnalyticsSummary | null;
 	readonly requests: RequestRecord[];
 	readonly filteredRequests: RequestRecord[];
 	readonly tokenSeries: TokenSeriesPoint[];
+	readonly clientUsage: ClientUsage[];
 	readonly availableProviders: ProviderOption[];
 	readonly availableModels: ModelOption[];
 	period: Period;
@@ -41,6 +45,7 @@ interface ConfiguredModelEntry {
 let summary = $state<AnalyticsSummary | null>(null);
 let requests = $state<RequestRecord[]>([]);
 let tokenSeries = $state<TokenSeriesPoint[]>([]);
+let clientUsage = $state<ClientUsage[]>([]);
 let configuredModels = $state<ConfiguredModelEntry[]>([]);
 let period = $state<Period>(DEFAULTS.period);
 let requestLimit = $state(DEFAULTS.requestLimit);
@@ -91,6 +96,14 @@ async function loadTokenSeries(): Promise<void> {
 	}
 }
 
+async function loadClientUsage(): Promise<void> {
+	try {
+		clientUsage = (await Api.fetchClientUsage(period)).clients;
+	} catch (e) {
+		error = extractError(e);
+	}
+}
+
 async function loadConfiguredModels(): Promise<void> {
 	try {
 		const settings = await Api.fetchSettings();
@@ -110,7 +123,14 @@ async function loadConfiguredModels(): Promise<void> {
 async function load(): Promise<void> {
 	loading = true;
 	error = null;
-	await Promise.all([loadSummary(), loadRequests(), loadConfiguredModels(), loadTokenSeries()]);
+	await Promise.all([
+		loadSummary(),
+		loadRequests(),
+		loadConfiguredModels(),
+		loadTokenSeries(),
+		loadClientUsage(),
+		insightsStore.load(period)
+	]);
 	loading = false;
 }
 
@@ -162,13 +182,19 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
 	{ value: 'all', label: 'All Providers' },
 	{ value: 'claude', label: getProviderLabel('claude') },
 	{ value: 'openai', label: getProviderLabel('openai') },
-	{ value: 'minimax', label: getProviderLabel('minimax') }
+	{ value: 'minimax', label: getProviderLabel('minimax') },
+	{ value: 'cursor', label: getProviderLabel('cursor') },
+	{ value: 'gemini', label: getProviderLabel('gemini') }
 ];
 
 // Labels map — exact model names from DB (after normalizeModelName).
 // Dated variants are the actual stored names for 4.5 models.
 const MODEL_LABELS: Record<string, string> = {
 	'gpt-6-astra': 'GPT-6 Astra',
+	'claude-opus-5-5': 'Claude Opus 5.5',
+	'claude-sonnet-5-5': 'Claude Sonnet 5.5',
+	'claude-haiku-5-5': 'Claude Haiku 5.5',
+	'claude-fable-5-2': 'Claude Fable 5.2',
 	// GPT-5.6 OpenAI series
 	'gpt-5.6': 'GPT-5.6',
 	'gpt-5.6-sol': 'GPT-5.6 Sol',
@@ -238,6 +264,14 @@ export function formatModelName(raw: string): string {
 	return raw;
 }
 
+function withSlug(name: string, slug: string): string {
+	if (!slug || name === slug) {
+		return name;
+	}
+
+	return `${name} · ${slug}`;
+}
+
 function availableModels(): ModelOption[] {
 	const seen = new SvelteSet<string>();
 	const models: ModelOption[] = [];
@@ -251,7 +285,7 @@ function availableModels(): ModelOption[] {
 			seen.add(model.id);
 			models.push({
 				value: model.id,
-				label: model.label.trim().length > 0 ? model.label : formatModelName(model.id)
+				label: withSlug(model.label.trim() || formatModelName(model.id), model.id)
 			});
 		}
 	}
@@ -263,7 +297,7 @@ function availableModels(): ModelOption[] {
 
 		if (!seen.has(r.model)) {
 			seen.add(r.model);
-			models.push({ value: r.model, label: formatModelName(r.model) });
+			models.push({ value: r.model, label: withSlug(formatModelName(r.model), r.model) });
 		}
 	}
 
@@ -314,9 +348,14 @@ export function getAnalyticsStore(): AnalyticsStore {
 			period = v;
 			void loadSummary();
 			void loadTokenSeries();
+			void loadClientUsage();
+			void insightsStore.load(v);
 		},
 		get tokenSeries() {
 			return tokenSeries;
+		},
+		get clientUsage() {
+			return clientUsage;
 		},
 		get requestLimit() {
 			return requestLimit;
